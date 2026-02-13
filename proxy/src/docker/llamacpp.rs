@@ -1,0 +1,365 @@
+use std::collections::HashMap;
+
+use anyhow::{Context, Result};
+use bollard::models::{
+    ContainerCreateBody, DeviceMapping, EndpointSettings, HostConfig, Mount, MountTypeEnum,
+    NetworkingConfig,
+};
+use bollard::query_parameters::{
+    CreateContainerOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+};
+use tracing::{error, info, warn};
+
+use super::{DockerManager, LABEL_BACKEND, LABEL_MANAGED_BY, LABEL_MANAGED_VALUE, LABEL_MODEL_ID};
+
+pub(crate) const LLAMACPP_IMAGE_CPU: &str = "ghcr.io/ggml-org/llama.cpp:server";
+pub(crate) const LLAMACPP_IMAGE_VULKAN: &str = "ghcr.io/ggml-org/llama.cpp:server-vulkan";
+
+// NOTE: CUDA and ROCm backend support has been removed.
+// - ROCm requires seccomp=unconfined (security concern) and showed poor
+//   performance in testing (0.6–2.4 t/s vs 4.5 t/s from Vulkan).
+// - CUDA support is untested and currently unsupported.
+// Vulkan provides GPU acceleration on both AMD and NVIDIA hardware without
+// these issues. See ADR 001 for details.
+const LLAMACPP_INTERNAL_PORT: u16 = 8080;
+
+/// GPU type for llama.cpp containers.
+#[derive(Debug, Clone, Default)]
+pub enum GpuType {
+    #[default]
+    None,
+    Vulkan,
+}
+
+impl GpuType {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "vulkan" => GpuType::Vulkan,
+            _ => GpuType::None,
+        }
+    }
+}
+
+/// Configuration for launching a llama.cpp container.
+#[derive(Debug, Clone)]
+pub struct LlamacppConfig {
+    pub model_id: String,
+    /// Path to the GGUF file relative to the model directory (e.g. "models--TheBloke--Llama-2-7B-GGUF/llama-2-7b.Q4_K_M.gguf")
+    pub gguf_path: String,
+    pub gpu_type: GpuType,
+    /// Number of layers to offload to GPU (default 99 = all)
+    pub gpu_layers: u32,
+    /// Context size (default 4096)
+    pub context_size: u32,
+    /// Number of parallel sequences / slots (default 1)
+    pub parallel: u32,
+    pub extra_args: Vec<String>,
+    /// Container UID — allocated by DockerManager::allocate_uid()
+    pub uid: u32,
+    /// API key for backend authentication — passed as --api-key to llama-server
+    pub api_key: String,
+}
+
+impl Default for LlamacppConfig {
+    fn default() -> Self {
+        Self {
+            model_id: String::new(),
+            gguf_path: String::new(),
+            gpu_type: GpuType::None,
+            gpu_layers: 99,
+            context_size: 4096,
+            parallel: 1,
+            extra_args: Vec::new(),
+            uid: 10000,
+            api_key: String::new(),
+        }
+    }
+}
+
+impl DockerManager {
+    /// Start a llama.cpp container for the given model.
+    pub async fn start_llamacpp(&self, config: &LlamacppConfig) -> Result<String> {
+        let container_name = format!("sovereign-llamacpp-{}", config.model_id);
+
+        // Check if container already exists
+        if let Ok(info) = self.docker.inspect_container(&container_name, None).await {
+            if let Some(state) = &info.state {
+                if state.running.unwrap_or(false) {
+                    info!(model = %config.model_id, "llama.cpp container already running");
+                    return Ok(container_name);
+                }
+            }
+            // Container exists but not running — remove and recreate
+            warn!(model = %config.model_id, "Removing stopped llama.cpp container");
+            self.docker
+                .remove_container(
+                    &container_name,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .context("Failed to remove existing container")?;
+        }
+
+        // Select image based on GPU type
+        let image = match config.gpu_type {
+            GpuType::Vulkan => LLAMACPP_IMAGE_VULKAN,
+            GpuType::None => LLAMACPP_IMAGE_CPU,
+        };
+
+        // Build llama-server command arguments
+        let mut cmd = vec![
+            "--model".to_string(),
+            format!("/models/{}", config.gguf_path),
+            "--host".to_string(),
+            "0.0.0.0".to_string(),
+            "--port".to_string(),
+            LLAMACPP_INTERNAL_PORT.to_string(),
+            "-ngl".to_string(),
+            config.gpu_layers.to_string(),
+            "-c".to_string(),
+            config.context_size.to_string(),
+        ];
+
+        // Parallel sequences (concurrency slots)
+        if config.parallel > 1 {
+            cmd.push("-np".to_string());
+            cmd.push(config.parallel.to_string());
+        }
+
+        // Add API key for backend authentication
+        cmd.push("--api-key".to_string());
+        cmd.push(config.api_key.clone());
+
+        cmd.extend(config.extra_args.clone());
+
+        let uid = config.uid;
+        let user_str = format!("{}:{}", uid, uid);
+
+        // Labels
+        let mut labels = HashMap::new();
+        labels.insert(
+            LABEL_MANAGED_BY.to_string(),
+            LABEL_MANAGED_VALUE.to_string(),
+        );
+        labels.insert(LABEL_MODEL_ID.to_string(), config.model_id.clone());
+        labels.insert(LABEL_BACKEND.to_string(), "llamacpp".to_string());
+
+        let mut host_config = HostConfig {
+            // No port bindings — llama.cpp is only reachable via the internal network
+            mounts: Some(vec![Mount {
+                target: Some("/models".to_string()),
+                source: Some(self.model_path.clone()),
+                typ: Some(MountTypeEnum::BIND),
+                read_only: Some(true),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        // GPU configuration
+        match config.gpu_type {
+            GpuType::Vulkan => {
+                // Vulkan: expose /dev/dri (and /dev/kfd if present for AMD).
+                let mut devices = vec![DeviceMapping {
+                    path_on_host: Some("/dev/dri".to_string()),
+                    path_in_container: Some("/dev/dri".to_string()),
+                    cgroup_permissions: Some("rw".to_string()),
+                }];
+                if std::path::Path::new("/dev/kfd").exists() {
+                    devices.push(DeviceMapping {
+                        path_on_host: Some("/dev/kfd".to_string()),
+                        path_in_container: Some("/dev/kfd".to_string()),
+                        cgroup_permissions: Some("rw".to_string()),
+                    });
+                }
+                host_config.devices = Some(devices);
+                // Discover the GIDs that own the GPU device files and forward
+                // them to the backend container so its non-root user can access
+                // /dev/dri and /dev/kfd.
+                let groups = gpu_device_gids();
+                if !groups.is_empty() {
+                    host_config.group_add = Some(groups);
+                }
+            }
+            GpuType::None => {
+                // CPU-only: no GPU config needed
+            }
+        }
+
+        // Attach to the internal network so the proxy can reach this container by name
+        let mut endpoints_config = HashMap::new();
+        endpoints_config.insert(self.backend_network.clone(), EndpointSettings::default());
+
+        let networking_config = NetworkingConfig {
+            endpoints_config: Some(endpoints_config),
+        };
+
+        let container_config = ContainerCreateBody {
+            image: Some(image.to_string()),
+            cmd: Some(cmd),
+            labels: Some(labels),
+            user: Some(user_str.clone()),
+            host_config: Some(host_config),
+            networking_config: Some(networking_config),
+            ..Default::default()
+        };
+
+        info!(
+            model = %config.model_id,
+            container = %container_name,
+            image = %image,
+            uid = uid,
+            gpu = ?config.gpu_type,
+            "Creating llama.cpp container"
+        );
+
+        self.docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(container_name.clone()),
+                    ..Default::default()
+                }),
+                container_config,
+            )
+            .await
+            .context("Failed to create llama.cpp container")?;
+
+        if let Err(e) = self
+            .docker
+            .start_container(&container_name, None::<StartContainerOptions>)
+            .await
+        {
+            error!(
+                model = %config.model_id,
+                container = %container_name,
+                error = %e,
+                "Failed to start llama.cpp container — cleaning up"
+            );
+            // Clean up the created-but-not-started container
+            let _ = self
+                .docker
+                .remove_container(
+                    &container_name,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
+            return Err(e).context("Failed to start llama.cpp container");
+        }
+
+        info!(
+            model = %config.model_id,
+            container = %container_name,
+            network = %self.backend_network,
+            uid = uid,
+            gpu = ?config.gpu_type,
+            "llama.cpp container started on internal network"
+        );
+
+        Ok(container_name)
+    }
+
+    /// Stop a llama.cpp container by model ID.
+    pub async fn stop_llamacpp(&self, model_id: &str) -> Result<()> {
+        let container_name = format!("sovereign-llamacpp-{}", model_id);
+
+        // Check container state first — only attempt stop if actually running
+        let is_running = match self.docker.inspect_container(&container_name, None).await {
+            Ok(info) => {
+                let status = info.state.as_ref().and_then(|s| s.status);
+                info!(model = %model_id, container = %container_name, state = ?status, "Inspected container for stop");
+                info.state.as_ref().and_then(|s| s.running).unwrap_or(false)
+            }
+            Err(e) => {
+                warn!(model = %model_id, container = %container_name, error = %e, "Container not found during stop");
+                return Ok(()); // Container doesn't exist — nothing to stop
+            }
+        };
+
+        if is_running {
+            self.docker
+                .stop_container(
+                    &container_name,
+                    Some(StopContainerOptions {
+                        t: Some(30),
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .context("Failed to stop llama.cpp container")?;
+        }
+
+        self.docker
+            .remove_container(
+                &container_name,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await
+            .context("Failed to remove llama.cpp container")?;
+
+        info!(model = %model_id, container = %container_name, "llama.cpp container stopped and removed");
+        Ok(())
+    }
+
+    /// Check if a llama.cpp container is healthy and responding.
+    pub async fn check_llamacpp_health(&self, model_id: &str) -> Result<bool> {
+        let container_name = format!("sovereign-llamacpp-{}", model_id);
+        let url = format!(
+            "http://{}:{}/health",
+            container_name, LLAMACPP_INTERNAL_PORT
+        );
+        match reqwest::get(&url).await {
+            Ok(resp) => Ok(resp.status().is_success()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Get the internal URL for a llama.cpp container on the isolated network.
+    pub fn llamacpp_base_url(&self, model_id: &str) -> String {
+        let container_name = format!("sovereign-llamacpp-{}", model_id);
+        format!("http://{}:{}", container_name, LLAMACPP_INTERNAL_PORT)
+    }
+}
+
+/// Discover the GIDs that own GPU device files (/dev/dri/*, /dev/kfd).
+///
+/// These GIDs are forwarded to backend containers via group_add so the
+/// non-root container user can access the GPU devices. By stat-ing the
+/// actual device files we pick up the correct host GIDs regardless of
+/// group naming or GID changes across reboots.
+fn gpu_device_gids() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::os::unix::fs::MetadataExt;
+
+    let mut gids = BTreeSet::new();
+
+    // Collect owning GIDs from all device files in /dev/dri/
+    if let Ok(entries) = std::fs::read_dir("/dev/dri") {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                let gid = meta.gid();
+                if gid != 0 {
+                    gids.insert(gid);
+                }
+            }
+        }
+    }
+
+    // /dev/kfd (AMD KFD) may have a different owning group
+    if let Ok(meta) = std::fs::metadata("/dev/kfd") {
+        let gid = meta.gid();
+        if gid != 0 {
+            gids.insert(gid);
+        }
+    }
+
+    gids.into_iter().map(|g| g.to_string()).collect()
+}

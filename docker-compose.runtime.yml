@@ -1,0 +1,119 @@
+# Runtime docker-compose — uses the pre-built image from Docker Hub.
+#
+# Quick start:
+#   1. Copy .env.example to .env and set BREAK_GLASS=true for initial setup
+#   2. docker compose -f docker-compose.runtime.yml up -d
+#   3. Open http://localhost:3000/portal and login with admin/changeme
+#   4. Configure an OIDC identity provider, then set BREAK_GLASS=false
+#
+# Production TLS setup (choose one):
+#
+# Option A: Automatic certs via Let's Encrypt (ACME, TLS-ALPN-01)
+#   1. Set ACME_DOMAIN, ACME_CONTACT, LISTEN_ADDR=0.0.0.0:443
+#   2. Ensure port 443 is directly reachable from the internet
+#   3. Certs are cached in /config/acme/ (sovereign-config volume)
+#   4. Use ACME_STAGING=true to test against staging endpoint first
+#
+# Option B: Manual TLS certs
+#   1. Generate or obtain TLS certs and place them in ./config/
+#   2. Add these environment variables:
+#        TLS_CERT_PATH=/config/cert.pem
+#        TLS_KEY_PATH=/config/key.pem
+#        LISTEN_ADDR=0.0.0.0:443
+#        EXTERNAL_URL=https://your-domain.example.com
+#   3. Change ports mapping to "443:443"
+#
+# Network architecture:
+#   sovereign-public   — bridge network, proxy exposed to host
+#   sovereign-internal — internal network, proxy ↔ backends only (no external access)
+#
+#   Backend containers (llama.cpp) are created programmatically via the Docker
+#   API and attached to sovereign-internal. The proxy reaches them by container name
+#   on port 8080.
+
+services:
+  proxy:
+    image: dragonhold2024/sovereign-engine:1.0.0
+    ports:
+      - "${SE_PORT:-3000}:3000"
+    networks:
+      sovereign-public:
+      sovereign-internal:
+      sovereign-openwebui:
+        aliases:
+          - ${ACME_DOMAIN:-proxy}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/config
+      - ${MODEL_HOST_PATH:-./models}:/models
+    # Docker socket access for the non-root container user.
+    # Override DOCKER_GID if your host uses a different GID (check: stat -c %g /var/run/docker.sock).
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      - LISTEN_ADDR=0.0.0.0:3000
+      - DATABASE_URL=sqlite:///config/sovereign.db
+      - EXTERNAL_URL=${EXTERNAL_URL:-http://localhost:3000}
+      - BOOTSTRAP_USER=${BOOTSTRAP_USER:-admin}
+      - BOOTSTRAP_PASSWORD=${BOOTSTRAP_PASSWORD:-changeme}
+      - BREAK_GLASS=${BREAK_GLASS:-false}
+      - MODEL_PATH=/models
+      - BACKEND_NETWORK=sovereign-internal
+      - WEBUI_API_KEY=${WEBUI_API_KEY}
+      - SECURE_COOKIES=${SECURE_COOKIES:-true}
+      - DB_ENCRYPTION_KEY=${DB_ENCRYPTION_KEY:-}
+      - RUST_LOG=${RUST_LOG:-sovereign_engine=info,tower_http=info}
+      # ACME (Let's Encrypt) — set in .env to enable
+      - ACME_DOMAIN=${ACME_DOMAIN:-}
+      - ACME_CONTACT=${ACME_CONTACT:-}
+      - ACME_STAGING=${ACME_STAGING:-}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -skf https://localhost:3000/auth/providers || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # Open WebUI — chat interface proxied through Sovereign Engine at /.
+  #
+  # Auth: Trusted headers from the proxy (X-SE-User-Email, X-SE-User-Name).
+  # Users authenticate via the portal's OIDC flow; no separate OIDC client needed.
+  # The proxy injects identity headers after session validation.
+  #
+  # API key: Both containers share WEBUI_API_KEY. The proxy auto-provisions an
+  # internal token at startup; Open WebUI uses it to call /v1 for inference.
+  #
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    networks:
+      - sovereign-openwebui
+    volumes:
+      - ./data/open-webui:/app/backend/data
+    environment:
+      - OPENAI_API_BASE_URL=${WEBUI_OPENAI_URL:-http://proxy:3000/v1}
+      - OPENAI_API_KEY=${WEBUI_API_KEY}
+      - OLLAMA_BASE_URL=
+      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-SE-User-Email
+      - WEBUI_AUTH_TRUSTED_NAME_HEADER=X-SE-User-Name
+      - ENABLE_SIGNUP=true
+      - ENABLE_LOGIN_FORM=false
+      - DEFAULT_USER_ROLE=user
+      - BYPASS_MODEL_ACCESS_CONTROL=True
+      - ENABLE_FORWARD_USER_INFO_HEADERS=True
+    depends_on:
+      - proxy
+    restart: unless-stopped
+
+networks:
+  sovereign-public:
+    name: sovereign-public
+    driver: bridge
+  sovereign-internal:
+    name: sovereign-internal
+    driver: bridge
+    internal: true
+  sovereign-openwebui:
+    name: sovereign-openwebui
+    driver: bridge
+    internal: true

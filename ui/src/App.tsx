@@ -1,0 +1,569 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { getMe, getProviders, logout, setOnUnauthorized } from './api';
+import type { AuthUser, AuthProvider } from './types';
+import { ThemeProvider, useTheme } from './theme';
+import { EventStreamProvider } from './hooks/EventStreamProvider';
+import { useEventStream } from './hooks/useEventStream';
+import Dashboard from './pages/user/Dashboard';
+import TokenManage from './pages/user/TokenManage';
+import Models from './pages/user/Models';
+import UserReservations from './pages/user/Reservations';
+import IdpConfig from './pages/admin/IdpConfig';
+import ModelMapping from './pages/admin/ModelMapping';
+import Users from './pages/admin/Users';
+import System from './pages/admin/System';
+import AdminReservations from './pages/admin/Reservations';
+import UsageDashboard from './pages/admin/UsageDashboard';
+import LoadingSpinner from './components/common/LoadingSpinner';
+import ErrorAlert from './components/common/ErrorAlert';
+import ThemeToggle from './components/common/ThemeToggle';
+
+// ---- Login Page ----
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const { colors } = useTheme();
+  const [providers, setProviders] = useState<AuthProvider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Bootstrap basic auth
+  const [showBasic, setShowBasic] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [basicLoading, setBasicLoading] = useState(false);
+  const [basicError, setBasicError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const provs = await getProviders();
+        setProviders(provs);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load login providers');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const handleBasicLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBasicLoading(true);
+    setBasicError(null);
+    try {
+      // Try to access /auth/me with Basic auth to check if it works
+      const res = await fetch('/auth/me', {
+        headers: {
+          'Authorization': 'Basic ' + btoa(`${username}:${password}`),
+        },
+      });
+      if (res.ok) {
+        onLogin();
+      } else {
+        setBasicError('Invalid credentials');
+      }
+    } catch {
+      setBasicError('Login failed');
+    } finally {
+      setBasicLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      fontFamily: 'system-ui, sans-serif',
+      background: colors.pageBg,
+    }}>
+      <div style={{
+        background: colors.cardBg,
+        borderRadius: 12,
+        padding: '2.5rem',
+        boxShadow: colors.dialogShadow,
+        maxWidth: 380,
+        width: '90%',
+        textAlign: 'center',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem' }}>
+          <ThemeToggle />
+        </div>
+        <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.5rem', color: colors.textPrimary }}>Sovereign Engine</h1>
+        <p style={{ margin: '0 0 1.5rem', color: colors.textMuted, fontSize: '0.9rem' }}>Sign in to continue</p>
+
+        {error && <ErrorAlert message={error} />}
+
+        {loading ? (
+          <LoadingSpinner message="Loading providers..." />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {providers.map((provider) => (
+              <a
+                key={provider.id}
+                href={`/auth/login?idp=${encodeURIComponent(provider.id)}`}
+                style={{
+                  display: 'block',
+                  padding: '0.75rem',
+                  background: colors.buttonPrimary,
+                  color: '#fff',
+                  borderRadius: 6,
+                  textDecoration: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.95rem',
+                }}
+              >
+                Sign in with {provider.name}
+              </a>
+            ))}
+
+            {providers.length === 0 && !error && (
+              <p style={{ color: colors.textMuted, fontSize: '0.85rem', margin: 0 }}>
+                No identity providers configured.
+              </p>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginTop: '1.5rem', borderTop: `1px solid ${colors.cardBorder}`, paddingTop: '1rem' }}>
+          <button
+            onClick={() => setShowBasic(!showBasic)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: colors.link,
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+              textDecoration: 'underline',
+            }}
+          >
+            {showBasic ? 'Hide' : 'Bootstrap / Basic Auth'}
+          </button>
+
+          {showBasic && (
+            <form onSubmit={handleBasicLogin} style={{ marginTop: '1rem', textAlign: 'left' }}>
+              {basicError && <ErrorAlert message={basicError} />}
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Username</label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: `1px solid ${colors.inputBorder}`,
+                    borderRadius: 4,
+                    fontSize: '0.9rem',
+                    boxSizing: 'border-box',
+                    background: colors.inputBg,
+                    color: colors.textPrimary,
+                  }}
+                  required
+                />
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    border: `1px solid ${colors.inputBorder}`,
+                    borderRadius: 4,
+                    fontSize: '0.9rem',
+                    boxSizing: 'border-box',
+                    background: colors.inputBg,
+                    color: colors.textPrimary,
+                  }}
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={basicLoading}
+                style={{
+                  width: '100%',
+                  padding: '0.6rem',
+                  background: basicLoading ? colors.buttonPrimaryDisabled : colors.buttonPrimary,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: basicLoading ? 'default' : 'pointer',
+                  fontSize: '0.9rem',
+                }}
+              >
+                {basicLoading ? 'Signing in...' : 'Sign In'}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Nav Link that highlights active route ----
+
+function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+  const location = useLocation();
+  const { colors } = useTheme();
+  const isActive = location.pathname === to;
+  return (
+    <Link
+      to={to}
+      style={{
+        color: isActive ? colors.navTextActive : colors.navTextInactive,
+        textDecoration: 'none',
+        fontSize: '0.9rem',
+        borderBottom: isActive ? `2px solid ${colors.navTextActive}` : '2px solid transparent',
+        paddingBottom: '0.2rem',
+      }}
+    >
+      {children}
+    </Link>
+  );
+}
+
+// ---- Authenticated App Shell ----
+
+function ReservationBanner({ userId }: { userId: string }) {
+  const { colors } = useTheme();
+  const { snapshot } = useEventStream();
+  const active = snapshot?.active_reservation;
+
+  if (!active || active.user_id === userId) return null;
+
+  return (
+    <div style={{
+      background: colors.warningBannerBg,
+      border: `1px solid ${colors.warningBannerBorder}`,
+      color: colors.warningBannerText,
+      padding: '0.5rem 2rem',
+      fontSize: '0.85rem',
+      textAlign: 'center',
+    }}>
+      System is currently reserved for exclusive use by {active.user_display_name || 'another user'}
+      {active.end_time && <span> (until {new Date(active.end_time + 'Z').toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })})</span>}
+    </div>
+  );
+}
+
+function GpuStatusBar() {
+  const { colors } = useTheme();
+  const { snapshot } = useEventStream();
+  const gpus = snapshot?.gpu_memory;
+
+  if (!gpus?.length) return null;
+
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+      {gpus.map((gpu, i) => {
+        const usedGb = (gpu.used_mb / 1024).toFixed(1);
+        const totalGb = (gpu.total_mb / 1024).toFixed(1);
+        const pct = gpu.total_mb > 0 ? Math.round((gpu.used_mb / gpu.total_mb) * 100) : 0;
+        const barColor = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : colors.successText;
+        return (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              fontSize: '0.75rem',
+              color: colors.navTextInactive,
+            }}
+            title={`${gpu.gpu_type} #${gpu.device_index} — ${usedGb}/${totalGb} GB VRAM${gpu.utilization_percent != null ? `, ${gpu.utilization_percent}% util` : ''}`}
+          >
+            <span style={{ fontWeight: 600, color: colors.navTextInactive }}>
+              {gpus.length > 1 ? `GPU${gpu.device_index}` : 'VRAM'}
+            </span>
+            <div style={{
+              width: 48,
+              height: 6,
+              background: colors.navSeparator,
+              borderRadius: 3,
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                width: `${pct}%`,
+                height: '100%',
+                background: barColor,
+                borderRadius: 3,
+                transition: 'width 0.5s ease',
+              }} />
+            </div>
+            <span>{usedGb}/{totalGb}G</span>
+            {gpu.utilization_percent != null && (
+              <span style={{ color: colors.navTextInactive, opacity: 0.7 }}>
+                {gpu.utilization_percent}%
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const THEME_OPTIONS: { mode: import('./theme').ThemeMode; icon: string; label: string }[] = [
+  { mode: 'system', icon: '\u{1F5A5}', label: 'System' },
+  { mode: 'light', icon: '\u2600', label: 'Light' },
+  { mode: 'dark', icon: '\u{1F319}', label: 'Dark' },
+];
+
+function ThemeSelector() {
+  const { colors, mode, setMode } = useTheme();
+  return (
+    <div style={{ borderBottom: `1px solid ${colors.cardBorder}` }}>
+      {THEME_OPTIONS.map((opt) => {
+        const active = mode === opt.mode;
+        return (
+          <button
+            key={opt.mode}
+            onClick={() => setMode(opt.mode)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              width: '100%',
+              padding: '0.4rem 0.75rem',
+              background: active ? colors.buttonPrimary : 'transparent',
+              color: active ? '#fff' : colors.textSecondary,
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: active ? 600 : 400,
+              textAlign: 'left',
+            }}
+          >
+            <span>{opt.icon}</span>
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function UserMenu({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={menuRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          padding: '0.3rem 0.7rem',
+          background: 'transparent',
+          color: colors.navTextInactive,
+          border: `1px solid ${colors.navSeparator}`,
+          borderRadius: 4,
+          cursor: 'pointer',
+          fontSize: '0.8rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+        }}
+      >
+        {user.display_name || user.email || 'User'}
+        <span style={{ fontSize: '0.6rem', lineHeight: 1 }}>{open ? '\u25B2' : '\u25BC'}</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 'calc(100% + 4px)',
+            background: colors.cardBg,
+            border: `1px solid ${colors.cardBorder}`,
+            borderRadius: 6,
+            boxShadow: colors.dialogShadow,
+            minWidth: 160,
+            zIndex: 100,
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '0.5rem 0.75rem', borderBottom: `1px solid ${colors.cardBorder}`, fontSize: '0.8rem', color: colors.textMuted }}>
+            {user.email || user.display_name || 'User'}
+            {user.is_admin && <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', color: colors.warningText }}>(admin)</span>}
+          </div>
+          <ThemeSelector />
+          <button
+            onClick={() => { setOpen(false); onLogout(); }}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '0.5rem 0.75rem',
+              background: 'none',
+              border: 'none',
+              textAlign: 'left',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              color: colors.buttonDanger,
+            }}
+          >
+            Sign Out
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+  const { colors } = useTheme();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // Even if the API call fails, clear local state
+    }
+    onLogout();
+  };
+
+  return (
+    <EventStreamProvider>
+    <div style={{ fontFamily: 'system-ui, sans-serif', margin: 0, padding: 0, minHeight: '100vh', background: colors.pageBg, color: colors.textPrimary }}>
+      <nav style={{
+        background: colors.navBg,
+        color: colors.navText,
+        padding: '0.75rem 2rem',
+        display: 'flex',
+        gap: '0.5rem 1.5rem',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+      }}>
+        <strong style={{ fontSize: '1.1rem', marginRight: '0.5rem' }}>Sovereign Engine</strong>
+        <NavLink to="/">Dashboard</NavLink>
+        <NavLink to="/tokens">Tokens</NavLink>
+        <NavLink to="/models">Models</NavLink>
+        <NavLink to="/reservations">Reservations</NavLink>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <GpuStatusBar />
+          <UserMenu user={user} onLogout={handleLogout} />
+        </div>
+
+        {user.is_admin && (
+          <>
+            <div style={{ flexBasis: '100%', height: 0, borderTop: `1px solid ${colors.navSeparator}` }} />
+            <strong style={{ fontSize: '1.1rem', marginRight: '0.5rem', visibility: 'hidden' }} aria-hidden="true">Sovereign Engine</strong>
+            <NavLink to="/admin/usage">Usage Analytics</NavLink>
+            <NavLink to="/admin/idp">IdP Config</NavLink>
+            <NavLink to="/admin/models">Model Mapping</NavLink>
+            <NavLink to="/admin/users">Users</NavLink>
+            <NavLink to="/admin/system">System</NavLink>
+            <NavLink to="/admin/reservations">Manage Reservations</NavLink>
+          </>
+        )}
+      </nav>
+      <ReservationBanner userId={user.user_id} />
+      <main style={{ padding: '2rem', maxWidth: 1200, margin: '0 auto' }}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/tokens" element={<TokenManage />} />
+          <Route path="/models" element={<Models />} />
+          <Route path="/reservations" element={<UserReservations userId={user.user_id} />} />
+          {user.is_admin && (
+            <>
+              <Route path="/admin/usage" element={<UsageDashboard />} />
+              <Route path="/admin/idp" element={<IdpConfig />} />
+              <Route path="/admin/models" element={<ModelMapping />} />
+              <Route path="/admin/users" element={<Users />} />
+              <Route path="/admin/system" element={<System />} />
+              <Route path="/admin/reservations" element={<AdminReservations userId={user.user_id} />} />
+            </>
+          )}
+        </Routes>
+      </main>
+    </div>
+    </EventStreamProvider>
+  );
+}
+
+// ---- Root App ----
+
+function App() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const checkAuth = useCallback(async () => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      const me = await getMe();
+      setUser(me);
+    } catch (err) {
+      // 401 is expected when not logged in
+      if (err instanceof Error && err.message === 'Unauthorized') {
+        setUser(null);
+      } else {
+        setAuthError(err instanceof Error ? err.message : 'Failed to check authentication');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setOnUnauthorized(() => {
+      setUser(null);
+    });
+    checkAuth();
+  }, [checkAuth]);
+
+  if (loading) {
+    return (
+      <div style={{ fontFamily: 'system-ui, sans-serif' }}>
+        <LoadingSpinner message="Checking authentication..." />
+      </div>
+    );
+  }
+
+  if (authError) {
+    return (
+      <div style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
+        <ErrorAlert message={authError} onRetry={checkAuth} />
+      </div>
+    );
+  }
+
+  return (
+    <BrowserRouter basename="/portal">
+      {user ? (
+        <AuthenticatedApp user={user} onLogout={() => setUser(null)} />
+      ) : (
+        <LoginPage onLogin={checkAuth} />
+      )}
+    </BrowserRouter>
+  );
+}
+
+export default function WrappedApp() {
+  return (
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
+  );
+}

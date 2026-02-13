@@ -1,0 +1,41 @@
+# Rust
+/proxy/target/
+**/*.rs.bk
+
+# Node
+/ui/node_modules/
+/ui/dist/
+
+# Environment
+.env
+*.pem
+*.key
+*.crt
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Runtime data
+/data/
+/models/
+
+# Local config (certs, DB)
+/config/
+
+# Scratch
+tmp.txt
