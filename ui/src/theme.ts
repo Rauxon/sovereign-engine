@@ -209,7 +209,7 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 const STORAGE_KEY = 'sovereign-theme';
 
 function getSystemTheme(): ResolvedTheme {
-  if (typeof globalThis.window === 'undefined') return 'light';
+  if (globalThis.window === undefined) return 'light';
   return globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
@@ -217,7 +217,7 @@ function getSystemTheme(): ResolvedTheme {
 
 export function ThemeProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [mode, setMode] = useState<ThemeMode>(() => {
-    if (typeof globalThis.window === 'undefined') return 'system';
+    if (globalThis.window === undefined) return 'system';
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
     return 'system';

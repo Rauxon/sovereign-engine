@@ -47,7 +47,7 @@ function LoginPage({ onLogin }: Readonly<{ onLogin: () => void }>) {
     })();
   }, []);
 
-  const handleBasicLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleBasicLogin = async (e: React.SubmitEvent) => {
     e.preventDefault();
     setBasicLoading(true);
     setBasicError(null);

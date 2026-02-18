@@ -213,11 +213,13 @@ function HfSearch({
               X
             </button>
           </div>
-          {pickerLoading ? (
+          {pickerLoading && (
             <div style={{ fontSize: '0.85rem', color: colors.textMuted }}>Loading files...</div>
-          ) : pickerFiles.length === 0 ? (
+          )}
+          {!pickerLoading && pickerFiles.length === 0 && (
             <div style={{ fontSize: '0.85rem', color: colors.textMuted }}>No .gguf files found in this repo.</div>
-          ) : (
+          )}
+          {!pickerLoading && pickerFiles.length > 0 && (
             <div style={{ maxHeight: 200, overflowY: 'auto' }}>
               {pickerFiles.map((f) => (
                 <div
@@ -267,6 +269,8 @@ function HfSearch({
             <tbody>
               {results.map((m) => {
                 const downloading = activeRepos.has(m.id);
+                const downloadTooltip = downloading ? 'Already downloading' : 'Download';
+                const buttonTitle = diskFull ? 'Disk full' : downloadTooltip;
                 return (
                   <tr key={m.id} style={{ borderBottom: `1px solid ${colors.tableRowBorder}` }}>
                     <td style={{ padding: '0.5rem', wordBreak: 'break-all' }}>{m.id}</td>
@@ -283,7 +287,7 @@ function HfSearch({
                         }}
                         disabled={diskFull || downloading}
                         onClick={() => handleDownloadClick(m.id)}
-                        title={diskFull ? 'Disk full' : downloading ? 'Already downloading' : 'Download'}
+                        title={buttonTitle}
                       >
                         {downloading ? 'Downloading...' : 'Download'}
                       </button>

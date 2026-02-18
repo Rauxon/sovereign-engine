@@ -87,7 +87,7 @@ export default function IdpConfig() {
     fetchIdps();
   }, [fetchIdps]);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setSubmitError(null);

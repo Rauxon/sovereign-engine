@@ -662,6 +662,86 @@ async fn is_download_cancelled(downloads: &Downloads, download_id: &str) -> bool
         .is_some_and(|dl| dl.status == DownloadStatus::Cancelled)
 }
 
+/// Build a user-facing hint for HTTP errors from HuggingFace.
+fn hf_http_error_hint(status: reqwest::StatusCode) -> &'static str {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        if std::env::var("HF_TOKEN").is_ok() {
+            " — HF_TOKEN may lack access to this gated model"
+        } else {
+            " — this may be a gated model; set HF_TOKEN env var to authenticate"
+        }
+    } else {
+        ""
+    }
+}
+
+/// Stream an HTTP response body to a file on disk with progress tracking and
+/// cancellation support. Returns the number of bytes written.
+async fn stream_response_to_file(
+    resp: reqwest::Response,
+    file_dest: &str,
+    file_path: &str,
+    downloads: &Downloads,
+    download_id: &str,
+    progress_offset: u64,
+) -> Result<u64, ()> {
+    let mut out_file = match tokio::fs::File::create(file_dest).await {
+        Ok(f) => f,
+        Err(e) => {
+            set_download_error(
+                downloads,
+                download_id,
+                &format!("Failed to create file {file_dest}: {e}"),
+            )
+            .await;
+            return Err(());
+        }
+    };
+
+    let mut file_downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        if is_download_cancelled(downloads, download_id).await {
+            info!(download_id = %download_id, "Download cancelled during transfer");
+            let _ = tokio::fs::remove_file(file_dest).await;
+            return Err(());
+        }
+
+        match chunk_result {
+            Ok(chunk) => {
+                use tokio::io::AsyncWriteExt;
+                if let Err(e) = out_file.write_all(&chunk).await {
+                    set_download_error(
+                        downloads,
+                        download_id,
+                        &format!("Write error for {file_path}: {e}"),
+                    )
+                    .await;
+                    return Err(());
+                }
+
+                file_downloaded += chunk.len() as u64;
+
+                let mut dls = downloads.write().await;
+                if let Some(dl) = dls.get_mut(download_id) {
+                    dl.progress_bytes = progress_offset + file_downloaded;
+                }
+            }
+            Err(e) => {
+                set_download_error(
+                    downloads,
+                    download_id,
+                    &format!("Stream error for {file_path}: {e}"),
+                )
+                .await;
+                return Err(());
+            }
+        }
+    }
+
+    Ok(file_downloaded)
+}
+
 /// Download a single file from HuggingFace to disk with progress tracking.
 /// `progress_offset` is the cumulative bytes already downloaded (for progress reporting).
 /// Returns the number of bytes downloaded for this file.
@@ -721,17 +801,7 @@ async fn download_single_file(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let hint = if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
-            if std::env::var("HF_TOKEN").is_ok() {
-                " — HF_TOKEN may lack access to this gated model"
-            } else {
-                " — this may be a gated model; set HF_TOKEN env var to authenticate"
-            }
-        } else {
-            ""
-        };
+        let hint = hf_http_error_hint(status);
         set_download_error(
             downloads,
             download_id,
@@ -741,64 +811,15 @@ async fn download_single_file(
         return Err(());
     }
 
-    // Stream file to disk with progress tracking
-    let mut out_file = match tokio::fs::File::create(&file_dest).await {
-        Ok(f) => f,
-        Err(e) => {
-            set_download_error(
-                downloads,
-                download_id,
-                &format!("Failed to create file {}: {e}", file_dest),
-            )
-            .await;
-            return Err(());
-        }
-    };
-
-    let mut file_downloaded: u64 = 0;
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk_result) = stream.next().await {
-        // Check for cancellation periodically
-        if is_download_cancelled(downloads, download_id).await {
-            info!(download_id = %download_id, "Download cancelled during transfer");
-            let _ = tokio::fs::remove_file(&file_dest).await;
-            return Err(());
-        }
-
-        match chunk_result {
-            Ok(chunk) => {
-                use tokio::io::AsyncWriteExt;
-                if let Err(e) = out_file.write_all(&chunk).await {
-                    set_download_error(
-                        downloads,
-                        download_id,
-                        &format!("Write error for {}: {e}", file.path),
-                    )
-                    .await;
-                    return Err(());
-                }
-
-                file_downloaded += chunk.len() as u64;
-
-                // Update progress
-                let mut dls = downloads.write().await;
-                if let Some(dl) = dls.get_mut(download_id) {
-                    dl.progress_bytes = progress_offset + file_downloaded;
-                }
-            }
-            Err(e) => {
-                set_download_error(
-                    downloads,
-                    download_id,
-                    &format!("Stream error for {}: {e}", file.path),
-                )
-                .await;
-                return Err(());
-            }
-        }
-    }
-
-    Ok(file_downloaded)
+    stream_response_to_file(
+        resp,
+        &file_dest,
+        &file.path,
+        downloads,
+        download_id,
+        progress_offset,
+    )
+    .await
 }
 
 /// Detect the primary model file from a list of downloaded files.

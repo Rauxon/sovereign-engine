@@ -23,14 +23,10 @@ function formatNumber(n: number): string {
 
 function LiveIndicator({ status }: Readonly<{ status: ConnectionStatus }>) {
   const { colors } = useTheme();
-  const color =
-    status === 'connected' ? colors.successText
-    : status === 'connecting' ? colors.warningText
-    : colors.dangerText;
-  const label =
-    status === 'connected' ? 'Live'
-    : status === 'connecting' ? 'Connecting...'
-    : 'Disconnected';
+  const fallbackColor = status === 'connecting' ? colors.warningText : colors.dangerText;
+  const color = status === 'connected' ? colors.successText : fallbackColor;
+  const fallbackLabel = status === 'connecting' ? 'Connecting...' : 'Disconnected';
+  const label = status === 'connected' ? 'Live' : fallbackLabel;
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color }}>

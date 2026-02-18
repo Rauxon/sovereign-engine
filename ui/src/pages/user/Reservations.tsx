@@ -302,8 +302,9 @@ export default function Reservations({ userId }: Readonly<{ userId: string }>) {
       {/* My Reservations modal */}
       {showMyReservations && (
         <div
-          role="button"
-          tabIndex={0}
+          role="dialog"
+          aria-modal="true"
+          aria-label="My Reservations"
           style={{
             position: 'fixed',
             top: 0,
@@ -318,14 +319,13 @@ export default function Reservations({ userId }: Readonly<{ userId: string }>) {
           }}
           onClick={() => setShowMyReservations(false)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (e.key === 'Escape') {
               e.preventDefault();
               setShowMyReservations(false);
             }
           }}
         >
           <div
-            role="presentation"
             style={{
               background: colors.dialogBg,
               borderRadius: 8,

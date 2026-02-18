@@ -20,28 +20,28 @@ export default function ConfirmDialog({
   const { colors } = useTheme();
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCancel(); } }}
+    <button
+      type="button"
       style={{
         position: 'fixed',
         top: 0,
         left: 0,
-        right: 0,
-        bottom: 0,
+        width: '100vw',
+        height: '100vh',
         background: colors.overlayBg,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 1000,
+        border: 'none',
+        padding: 0,
+        cursor: 'default',
       }}
       onClick={onCancel}
     >
       <div
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={title}
         style={{
           background: colors.dialogBg,
           borderRadius: 8,
@@ -83,6 +83,6 @@ export default function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </button>
   );
 }

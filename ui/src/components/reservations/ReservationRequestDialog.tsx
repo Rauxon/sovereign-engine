@@ -63,8 +63,9 @@ export default function ReservationRequestDialog({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Request Reservation"
       style={{
         position: 'fixed',
         top: 0,
@@ -79,14 +80,13 @@ export default function ReservationRequestDialog({
       }}
       onClick={onCancel}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === 'Escape') {
           e.preventDefault();
           onCancel();
         }
       }}
     >
       <div
-        role="presentation"
         style={{
           background: colors.dialogBg,
           borderRadius: 8,
@@ -102,6 +102,7 @@ export default function ReservationRequestDialog({
 
         <div style={{ marginBottom: '0.75rem' }}>
           <label
+            htmlFor="reservation-start"
             style={{
               display: 'block',
               marginBottom: '0.25rem',
@@ -113,6 +114,7 @@ export default function ReservationRequestDialog({
             Start
           </label>
           <input
+            id="reservation-start"
             type="datetime-local"
             value={editStart}
             onChange={(e) => setEditStart(e.target.value)}
@@ -122,6 +124,7 @@ export default function ReservationRequestDialog({
 
         <div style={{ marginBottom: '0.75rem' }}>
           <label
+            htmlFor="reservation-end"
             style={{
               display: 'block',
               marginBottom: '0.25rem',
@@ -133,6 +136,7 @@ export default function ReservationRequestDialog({
             End
           </label>
           <input
+            id="reservation-end"
             type="datetime-local"
             value={editEnd}
             onChange={(e) => setEditEnd(e.target.value)}
@@ -142,6 +146,7 @@ export default function ReservationRequestDialog({
 
         <div style={{ marginBottom: '0.75rem' }}>
           <label
+            htmlFor="reservation-reason"
             style={{
               display: 'block',
               marginBottom: '0.25rem',
@@ -153,6 +158,7 @@ export default function ReservationRequestDialog({
             Reason (optional)
           </label>
           <textarea
+            id="reservation-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={3}

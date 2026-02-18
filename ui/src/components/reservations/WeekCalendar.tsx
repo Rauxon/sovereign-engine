@@ -531,17 +531,10 @@ export default function WeekCalendar({
                   const timeLabel = `${formatTime(block.topSlot)}–${formatTime(block.bottomSlot + 1)}`;
 
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={block.reservation.id}
-                      role={onReservationClick ? 'button' : undefined}
-                      tabIndex={onReservationClick ? 0 : undefined}
-                      onClick={() => onReservationClick?.(block.reservation)}
-                      onKeyDown={onReservationClick ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onReservationClick(block.reservation);
-                        }
-                      } : undefined}
+                      onClick={onReservationClick ? () => onReservationClick(block.reservation) : undefined}
                       title={`${label} (${block.reservation.status})\n${timeLabel}${block.reservation.reason ? '\n' + block.reservation.reason : ''}`}
                       style={{
                         position: 'absolute',
@@ -560,6 +553,11 @@ export default function WeekCalendar({
                         display: 'flex',
                         flexDirection: 'column',
                         justifyContent: 'center',
+                        border: 'none',
+                        font: 'inherit',
+                        color: 'inherit',
+                        textAlign: 'inherit',
+                        width: 'auto',
                       }}
                     >
                       {isShort ? (
@@ -600,7 +598,7 @@ export default function WeekCalendar({
                           </span>
                         </>
                       )}
-                    </div>
+                    </button>
                   );
                 })}
 
@@ -612,15 +610,14 @@ export default function WeekCalendar({
                   const hovered =
                     hoveredCell?.day === dayIdx && hoveredCell?.slot === slot && !occupied;
 
-                  const cellBg = selected
-                    ? colors.badgePurpleBg
-                    : hovered
-                      ? `${colors.buttonPrimary}10`
-                      : 'transparent';
+                  let cellBg = 'transparent';
+                  if (selected) cellBg = colors.badgePurpleBg;
+                  else if (hovered) cellBg = `${colors.buttonPrimary}10`;
 
                   return (
                     <div
                       key={`cell-${slot}`}
+                      aria-hidden="true"
                       onMouseDown={() => handleMouseDown(dayIdx, slot)}
                       onMouseMove={() => handleMouseMove(dayIdx, slot)}
                       onMouseEnter={() => setHoveredCell({ day: dayIdx, slot })}
@@ -642,7 +639,7 @@ export default function WeekCalendar({
                 })}
 
                 {/* Now-line */}
-                {nowSlotFraction && nowSlotFraction.dayIdx === dayIdx && (
+                {nowSlotFraction?.dayIdx === dayIdx && (
                   <div
                     style={{
                       position: 'absolute',

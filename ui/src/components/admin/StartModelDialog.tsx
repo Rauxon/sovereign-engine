@@ -124,22 +124,28 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
   };
 
   return (
-    <div
+    <button
+      type="button"
       style={{
         position: 'fixed',
         top: 0,
         left: 0,
-        right: 0,
-        bottom: 0,
+        width: '100vw',
+        height: '100vh',
         background: colors.overlayBg,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: 1000,
+        border: 'none',
+        padding: 0,
+        cursor: 'default',
       }}
       onClick={onCancel}
     >
       <div
+        role="dialog"
+        aria-label="Start Model"
         style={{
           background: colors.dialogBg,
           borderRadius: 8,
@@ -319,6 +325,6 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
           </button>
         </div>
       </div>
-    </div>
+    </button>
   );
 }

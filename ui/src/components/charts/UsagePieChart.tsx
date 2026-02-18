@@ -42,8 +42,8 @@ export default function UsagePieChart({ data, title }: Readonly<UsagePieChartPro
             }
             labelLine={false}
           >
-            {data.map((_entry, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+            {data.map((entry, index) => (
+              <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
             ))}
           </Pie>
           <Tooltip contentStyle={{ background: colors.cardBg, border: `1px solid ${colors.cardBorder}`, color: colors.textPrimary }} />

@@ -363,8 +363,9 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
       {/* Approve/Reject dialog with note */}
       {pendingAction && (
         <div
-          role="button"
-          tabIndex={0}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${pendingAction.action === 'approve' ? 'Approve' : 'Reject'} Reservation`}
           style={{
             position: 'fixed',
             top: 0,
@@ -379,14 +380,13 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
           }}
           onClick={() => setPendingAction(null)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (e.key === 'Escape') {
               e.preventDefault();
               setPendingAction(null);
             }
           }}
         >
           <div
-            role="presentation"
             style={{
               background: colors.dialogBg,
               borderRadius: 8,
@@ -402,10 +402,11 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
               {pendingAction.action === 'approve' ? 'Approve' : 'Reject'} Reservation
             </h3>
             <div style={{ marginBottom: '0.75rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>
+              <label htmlFor="admin-reservation-note" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>
                 Note (optional)
               </label>
               <textarea
+                id="admin-reservation-note"
                 value={noteInput}
                 onChange={(e) => setNoteInput(e.target.value)}
                 rows={2}
@@ -439,16 +440,19 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
                 Cancel
               </button>
               {(() => {
-                const actionBg = acting
-                  ? colors.buttonPrimaryDisabled
-                  : pendingAction.action === 'approve'
-                    ? colors.successText
-                    : colors.buttonDanger;
-                const actionLabel = acting
-                  ? 'Processing...'
-                  : pendingAction.action === 'approve'
-                    ? 'Approve'
-                    : 'Reject';
+                const isApprove = pendingAction.action === 'approve';
+                let actionBg: string;
+                let actionLabel: string;
+                if (acting) {
+                  actionBg = colors.buttonPrimaryDisabled;
+                  actionLabel = 'Processing...';
+                } else if (isApprove) {
+                  actionBg = colors.successText;
+                  actionLabel = 'Approve';
+                } else {
+                  actionBg = colors.buttonDanger;
+                  actionLabel = 'Reject';
+                }
                 return (
                   <button
                     onClick={handleApproveReject}

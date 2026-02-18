@@ -141,7 +141,7 @@ export default function TokenManage() {
     setMinted(null);
   };
 
-  const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleCreate = async (e: React.SubmitEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     setSubmitting(true);

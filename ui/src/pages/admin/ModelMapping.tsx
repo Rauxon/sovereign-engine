@@ -107,7 +107,7 @@ export default function ModelMapping() {
     setShowCatForm(true);
   };
 
-  const handleCatSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleCatSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault();
     setCatSubmitting(true);
     setCatSubmitError(null);
