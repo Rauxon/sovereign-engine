@@ -70,3 +70,91 @@ pub fn api_error(status: StatusCode, context: &str, err: impl std::fmt::Display)
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // validate_len
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_len_under_max_is_ok() {
+        assert!(validate_len("name", "hello", 10).is_none());
+    }
+
+    #[test]
+    fn validate_len_at_max_is_ok() {
+        assert!(validate_len("name", "12345", 5).is_none());
+    }
+
+    #[test]
+    fn validate_len_over_max_returns_error() {
+        let resp = validate_len("name", "123456", 5);
+        assert!(resp.is_some());
+    }
+
+    #[test]
+    fn validate_len_empty_string_is_ok() {
+        assert!(validate_len("name", "", 5).is_none());
+    }
+
+    #[test]
+    fn validate_len_zero_max_empty_string_ok() {
+        assert!(validate_len("name", "", 0).is_none());
+    }
+
+    #[test]
+    fn validate_len_zero_max_nonempty_returns_error() {
+        assert!(validate_len("name", "a", 0).is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_hf_repo
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_hf_repo_valid_simple() {
+        assert!(validate_hf_repo("owner/model-name").is_none());
+    }
+
+    #[test]
+    fn validate_hf_repo_valid_with_dots_and_underscores() {
+        assert!(validate_hf_repo("Org_Name/Model.v2").is_none());
+    }
+
+    #[test]
+    fn validate_hf_repo_path_traversal_rejected() {
+        assert!(validate_hf_repo("../etc/passwd").is_some());
+    }
+
+    #[test]
+    fn validate_hf_repo_double_dot_in_middle_rejected() {
+        assert!(validate_hf_repo("owner/..sneaky").is_some());
+    }
+
+    #[test]
+    fn validate_hf_repo_no_slash_rejected() {
+        assert!(validate_hf_repo("justmodelname").is_some());
+    }
+
+    #[test]
+    fn validate_hf_repo_empty_rejected() {
+        assert!(validate_hf_repo("").is_some());
+    }
+
+    #[test]
+    fn validate_hf_repo_invalid_chars_rejected() {
+        assert!(validate_hf_repo("owner/model name").is_some()); // space
+        assert!(validate_hf_repo("owner/model@v2").is_some()); // @
+        assert!(validate_hf_repo("owner/model;rm").is_some()); // semicolon
+    }
+
+    #[test]
+    fn validate_hf_repo_multiple_slashes_ok() {
+        // The function only checks for presence of '/' and safe chars;
+        // "a/b/c" passes the current validation.
+        assert!(validate_hf_repo("a/b/c").is_none());
+    }
+}

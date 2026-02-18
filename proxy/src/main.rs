@@ -458,3 +458,81 @@ async fn security_headers(req: axum::extract::Request, next: axum::middleware::N
     }
     response
 }
+
+#[cfg(test)]
+mod csp_tests {
+    use super::*;
+
+    #[test]
+    fn no_scripts_returns_empty_vec() {
+        let html = "<html><body><p>Hello</p></body></html>";
+        let hashes = extract_inline_script_hashes(html);
+        assert!(hashes.is_empty());
+    }
+
+    #[test]
+    fn single_inline_script_returns_one_hash() {
+        let html = r#"<html><head><script>console.log("hi")</script></head></html>"#;
+        let hashes = extract_inline_script_hashes(html);
+        assert_eq!(hashes.len(), 1);
+        assert!(hashes[0].starts_with("sha256-"));
+    }
+
+    #[test]
+    fn single_inline_script_hash_is_deterministic() {
+        let html = "<script>var x = 1;</script>";
+        let h1 = extract_inline_script_hashes(html);
+        let h2 = extract_inline_script_hashes(html);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn multiple_inline_scripts_returns_all_hashes() {
+        let html = r#"
+            <script>var a = 1;</script>
+            <script>var b = 2;</script>
+            <script>var c = 3;</script>
+        "#;
+        let hashes = extract_inline_script_hashes(html);
+        assert_eq!(hashes.len(), 3);
+        // All hashes should be distinct (different content)
+        assert_ne!(hashes[0], hashes[1]);
+        assert_ne!(hashes[1], hashes[2]);
+        assert_ne!(hashes[0], hashes[2]);
+    }
+
+    #[test]
+    fn script_with_src_attribute_is_not_matched() {
+        // The parser looks for "<script>" exactly — a <script src="..."> tag won't match
+        let html = r#"<script src="app.js"></script><script>inline()</script>"#;
+        let hashes = extract_inline_script_hashes(html);
+        assert_eq!(hashes.len(), 1);
+        // The hash should be for "inline()" not the src tag
+    }
+
+    #[test]
+    fn empty_inline_script_still_hashed() {
+        let html = "<script></script>";
+        let hashes = extract_inline_script_hashes(html);
+        assert_eq!(hashes.len(), 1);
+        assert!(hashes[0].starts_with("sha256-"));
+    }
+
+    #[test]
+    fn hash_matches_known_value() {
+        // SHA-256 of empty string = 47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
+        let html = "<script></script>";
+        let hashes = extract_inline_script_hashes(html);
+        assert_eq!(
+            hashes[0],
+            "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+        );
+    }
+
+    #[test]
+    fn unclosed_script_tag_stops_parsing() {
+        let html = "<script>var x = 1;";
+        let hashes = extract_inline_script_hashes(html);
+        assert!(hashes.is_empty());
+    }
+}

@@ -182,6 +182,46 @@ pub async fn resolve_meta_user(db: &Database, email: &str) -> Result<Option<Meta
     Ok(Some(MetaResolution { user_id, token_id }))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_token_has_correct_prefix_and_uuid() {
+        let token = generate_token();
+        assert!(token.starts_with("se-"), "token should start with 'se-'");
+        let uuid_part = &token[3..];
+        assert!(
+            Uuid::parse_str(uuid_part).is_ok(),
+            "part after 'se-' should be a valid UUID, got: {uuid_part}"
+        );
+    }
+
+    #[test]
+    fn hash_token_is_deterministic() {
+        let hash1 = hash_token("se-test-token");
+        let hash2 = hash_token("se-test-token");
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn hash_token_output_is_64_char_hex() {
+        let hash = hash_token("se-anything");
+        assert_eq!(hash.len(), 64);
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash should be valid hex, got: {hash}"
+        );
+    }
+
+    #[test]
+    fn hash_token_different_inputs_produce_different_hashes() {
+        let h1 = hash_token("se-token-a");
+        let h2 = hash_token("se-token-b");
+        assert_ne!(h1, h2);
+    }
+}
+
 /// Ensure an internal API token exists for Open WebUI ↔ proxy communication.
 ///
 /// If WEBUI_API_KEY is set, hashes it and ensures a matching token row exists.

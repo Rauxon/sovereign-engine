@@ -114,3 +114,61 @@ pub struct SessionUser {
     pub email: Option<String>,
     pub display_name: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_session_token_is_64_char_hex() {
+        let token = generate_session_token();
+        assert_eq!(token.len(), 64);
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "token should be valid hex, got: {token}"
+        );
+    }
+
+    #[test]
+    fn build_cookie_contains_required_parts() {
+        let cookie = build_cookie("abc123", 86400, false);
+        assert!(cookie.contains("se_session=abc123"), "should contain token");
+        assert!(cookie.contains("Max-Age=86400"), "should contain max_age");
+        assert!(cookie.contains("HttpOnly"), "should contain HttpOnly");
+        assert!(cookie.contains("SameSite=Lax"), "should contain SameSite");
+        assert!(cookie.contains("Path=/"), "should contain Path");
+    }
+
+    #[test]
+    fn build_cookie_secure_flag_when_true() {
+        let cookie = build_cookie("tok", 3600, true);
+        assert!(cookie.contains("; Secure"), "should contain Secure flag");
+    }
+
+    #[test]
+    fn build_cookie_no_secure_flag_when_false() {
+        let cookie = build_cookie("tok", 3600, false);
+        assert!(!cookie.contains("Secure"), "should not contain Secure flag");
+    }
+
+    #[test]
+    fn clear_cookie_sets_max_age_zero() {
+        let cookie = clear_cookie(false);
+        assert!(cookie.contains("Max-Age=0"), "should set Max-Age=0");
+        assert!(
+            cookie.contains("se_session="),
+            "should reference the session cookie name"
+        );
+    }
+
+    #[test]
+    fn clear_cookie_secure_flag() {
+        let secure = clear_cookie(true);
+        let insecure = clear_cookie(false);
+        assert!(secure.contains("; Secure"), "secure=true should set Secure");
+        assert!(
+            !insecure.contains("Secure"),
+            "secure=false should not set Secure"
+        );
+    }
+}

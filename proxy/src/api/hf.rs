@@ -1399,3 +1399,221 @@ fn urlencoded(s: &str) -> String {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- hf_http_error_hint --------------------------------------------------
+
+    #[test]
+    fn hf_http_error_hint_unauthorized_without_token() {
+        // Ensure HF_TOKEN is unset for this test
+        std::env::remove_var("HF_TOKEN");
+        let hint = hf_http_error_hint(reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            hint.contains("set HF_TOKEN"),
+            "Expected suggestion to set HF_TOKEN, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn hf_http_error_hint_forbidden_without_token() {
+        std::env::remove_var("HF_TOKEN");
+        let hint = hf_http_error_hint(reqwest::StatusCode::FORBIDDEN);
+        assert!(
+            hint.contains("set HF_TOKEN"),
+            "Expected suggestion to set HF_TOKEN, got: {hint}"
+        );
+    }
+
+    #[test]
+    fn hf_http_error_hint_unauthorized_with_token() {
+        std::env::set_var("HF_TOKEN", "hf_test_token");
+        let hint = hf_http_error_hint(reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            hint.contains("lack access"),
+            "Expected 'lack access' hint, got: {hint}"
+        );
+        std::env::remove_var("HF_TOKEN");
+    }
+
+    #[test]
+    fn hf_http_error_hint_forbidden_with_token() {
+        std::env::set_var("HF_TOKEN", "hf_test_token");
+        let hint = hf_http_error_hint(reqwest::StatusCode::FORBIDDEN);
+        assert!(
+            hint.contains("lack access"),
+            "Expected 'lack access' hint, got: {hint}"
+        );
+        std::env::remove_var("HF_TOKEN");
+    }
+
+    #[test]
+    fn hf_http_error_hint_other_status_returns_empty() {
+        let hint = hf_http_error_hint(reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(hint, "");
+
+        let hint = hf_http_error_hint(reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(hint, "");
+
+        let hint = hf_http_error_hint(reqwest::StatusCode::BAD_REQUEST);
+        assert_eq!(hint, "");
+    }
+
+    // -- format_bytes --------------------------------------------------------
+
+    #[test]
+    fn format_bytes_zero() {
+        assert_eq!(format_bytes(0), "0 B");
+    }
+
+    #[test]
+    fn format_bytes_small() {
+        assert_eq!(format_bytes(1), "1 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn format_bytes_kb() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(10 * 1024), "10.0 KB");
+    }
+
+    #[test]
+    fn format_bytes_mb() {
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(5 * 1024 * 1024 + 512 * 1024), "5.5 MB");
+    }
+
+    #[test]
+    fn format_bytes_gb() {
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.0 GB");
+        assert_eq!(
+            format_bytes(7 * 1024 * 1024 * 1024 + 512 * 1024 * 1024),
+            "7.5 GB"
+        );
+    }
+
+    #[test]
+    fn format_bytes_tb() {
+        assert_eq!(format_bytes(1024u64 * 1024 * 1024 * 1024), "1.0 TB");
+        assert_eq!(
+            format_bytes(2 * 1024u64 * 1024 * 1024 * 1024 + 512 * 1024 * 1024 * 1024),
+            "2.5 TB"
+        );
+    }
+
+    // -- detect_primary_file -------------------------------------------------
+
+    fn make_file(path: &str, size: u64) -> HfFileEntry {
+        HfFileEntry {
+            file_type: "file".to_string(),
+            path: path.to_string(),
+            size: Some(size),
+        }
+    }
+
+    #[test]
+    fn detect_primary_file_empty_list() {
+        assert_eq!(detect_primary_file(&[]), None);
+    }
+
+    #[test]
+    fn detect_primary_file_no_matching_extensions() {
+        let files = vec![make_file("README.md", 1000), make_file("config.json", 500)];
+        assert_eq!(detect_primary_file(&files), None);
+    }
+
+    #[test]
+    fn detect_primary_file_prefers_gguf() {
+        let files = vec![
+            make_file("model.safetensors", 10_000_000),
+            make_file("model-q4.gguf", 5_000_000),
+        ];
+        assert_eq!(
+            detect_primary_file(&files),
+            Some("model-q4.gguf".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_primary_file_largest_gguf() {
+        let files = vec![
+            make_file("model-q2.gguf", 2_000_000),
+            make_file("model-q8.gguf", 8_000_000),
+            make_file("model-q4.gguf", 4_000_000),
+        ];
+        assert_eq!(
+            detect_primary_file(&files),
+            Some("model-q8.gguf".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_primary_file_falls_back_to_safetensors() {
+        let files = vec![
+            make_file("config.json", 500),
+            make_file("model.safetensors", 10_000_000),
+            make_file("model-2.safetensors", 20_000_000),
+        ];
+        assert_eq!(
+            detect_primary_file(&files),
+            Some("model-2.safetensors".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_primary_file_none_size_treated_as_zero() {
+        let files = vec![HfFileEntry {
+            file_type: "file".to_string(),
+            path: "model.gguf".to_string(),
+            size: None,
+        }];
+        assert_eq!(detect_primary_file(&files), Some("model.gguf".to_string()));
+    }
+
+    // -- urlencoded ----------------------------------------------------------
+
+    #[test]
+    fn urlencoded_alphanumeric_preserved() {
+        assert_eq!(urlencoded("Hello123"), "Hello123");
+    }
+
+    #[test]
+    fn urlencoded_unreserved_chars_preserved() {
+        assert_eq!(urlencoded("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn urlencoded_space_becomes_plus() {
+        assert_eq!(urlencoded("hello world"), "hello+world");
+    }
+
+    #[test]
+    fn urlencoded_special_chars_encoded() {
+        assert_eq!(urlencoded("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn urlencoded_slash_encoded() {
+        assert_eq!(urlencoded("path/to/thing"), "path%2Fto%2Fthing");
+    }
+
+    #[test]
+    fn urlencoded_empty_string() {
+        assert_eq!(urlencoded(""), "");
+    }
+
+    #[test]
+    fn urlencoded_unicode_chars() {
+        // Multi-byte UTF-8 character should be percent-encoded per byte
+        let encoded = urlencoded("café");
+        assert!(encoded.starts_with("caf"));
+        assert!(encoded.contains('%'));
+        // 'é' is U+00E9, encoded as %C3%A9 in UTF-8
+        assert_eq!(encoded, "caf%C3%A9");
+    }
+}

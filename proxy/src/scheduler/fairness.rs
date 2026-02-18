@@ -116,6 +116,109 @@ mod tests {
         assert!((p200 - p200k) > 30.0);
     }
 
+    // -- Edge cases ----------------------------------------------------------
+
+    #[test]
+    fn test_negative_wait_seconds() {
+        let s = default_settings();
+        let p = calculate_priority(&s, -10.0, 0);
+        // wait_weight=1.0, so -10s wait gives base_priority + (1.0 * -10) - 0 = 90
+        assert!(
+            (p - 90.0).abs() < f64::EPSILON,
+            "Negative wait should reduce priority, got: {p}"
+        );
+    }
+
+    #[test]
+    fn test_negative_wait_lowers_priority_below_zero_wait() {
+        let s = default_settings();
+        let p_neg = calculate_priority(&s, -5.0, 1000);
+        let p_zero = calculate_priority(&s, 0.0, 1000);
+        assert!(
+            p_neg < p_zero,
+            "Negative wait should yield lower priority than zero wait"
+        );
+    }
+
+    #[test]
+    fn test_very_large_token_count() {
+        let s = default_settings();
+        // 1 billion tokens — must not panic or produce NaN/Inf
+        let p = calculate_priority(&s, 0.0, 1_000_000_000);
+        assert!(p.is_finite(), "Priority should be finite, got: {p}");
+        // Should be significantly below base_priority
+        assert!(p < s.base_priority);
+    }
+
+    #[test]
+    fn test_extremely_large_token_count() {
+        let s = default_settings();
+        let p = calculate_priority(&s, 0.0, i64::MAX);
+        assert!(
+            p.is_finite(),
+            "Priority should be finite for i64::MAX tokens"
+        );
+        assert!(p < s.base_priority);
+    }
+
+    #[test]
+    fn test_zero_wait_weight() {
+        let s = FairnessSettings {
+            wait_weight: 0.0,
+            ..default_settings()
+        };
+        let p1 = calculate_priority(&s, 0.0, 5000);
+        let p2 = calculate_priority(&s, 100.0, 5000);
+        assert!(
+            (p1 - p2).abs() < f64::EPSILON,
+            "Zero wait_weight means wait time should not affect priority"
+        );
+    }
+
+    #[test]
+    fn test_zero_usage_weight() {
+        let s = FairnessSettings {
+            usage_weight: 0.0,
+            ..default_settings()
+        };
+        let p1 = calculate_priority(&s, 10.0, 0);
+        let p2 = calculate_priority(&s, 10.0, 1_000_000);
+        assert!(
+            (p1 - p2).abs() < f64::EPSILON,
+            "Zero usage_weight means usage should not affect priority"
+        );
+    }
+
+    #[test]
+    fn test_zero_both_weights() {
+        let s = FairnessSettings {
+            wait_weight: 0.0,
+            usage_weight: 0.0,
+            ..default_settings()
+        };
+        let p = calculate_priority(&s, 999.0, 999_999);
+        assert!(
+            (p - s.base_priority).abs() < f64::EPSILON,
+            "Zero weights should return base_priority regardless of inputs"
+        );
+    }
+
+    #[test]
+    fn test_zero_usage_scale_does_not_panic() {
+        // usage_scale=0 would cause division by zero inside ln, which would be ln(1 + inf) = inf
+        // This is a degenerate config but should not panic
+        let s = FairnessSettings {
+            usage_scale: 0.0,
+            ..default_settings()
+        };
+        let p = calculate_priority(&s, 0.0, 1000);
+        // 1000/0 = inf, ln(1+inf) = inf, so penalty = inf, priority = -inf
+        assert!(
+            p.is_infinite() || p.is_finite(),
+            "Should not panic with zero usage_scale"
+        );
+    }
+
     // --- DB-dependent tests for get_recent_usage ---
 
     use crate::db::Database;

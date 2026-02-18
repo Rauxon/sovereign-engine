@@ -136,3 +136,57 @@ pub async fn migrate_plaintext_secrets(db: &Database, key: &str) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_KEY: &str = "test-encryption-key-with-enough-entropy";
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        let plaintext = "my-secret-client-secret";
+        let encrypted = encrypt(plaintext, TEST_KEY).unwrap();
+        let decrypted = decrypt(&encrypted, TEST_KEY).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn decrypt_with_wrong_key_fails() {
+        let encrypted = encrypt("secret", TEST_KEY).unwrap();
+        let result = decrypt(&encrypted, "wrong-key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_with_invalid_base64_fails() {
+        let result = decrypt("not-valid-base64!!!", TEST_KEY);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_with_truncated_ciphertext_fails() {
+        let encrypted = encrypt("secret", TEST_KEY).unwrap();
+        // Decode, truncate to less than 12 bytes (nonce size), re-encode
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encrypted)
+            .unwrap();
+        let truncated = base64::engine::general_purpose::STANDARD.encode(&bytes[..8]);
+        let result = decrypt(&truncated, TEST_KEY);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn same_plaintext_same_key_produces_different_ciphertexts() {
+        let a = encrypt("same-input", TEST_KEY).unwrap();
+        let b = encrypt("same-input", TEST_KEY).unwrap();
+        assert_ne!(a, b, "random nonce should produce different ciphertexts");
+    }
+
+    #[test]
+    fn derive_key_is_deterministic() {
+        let k1 = derive_key("my-key");
+        let k2 = derive_key("my-key");
+        assert_eq!(k1, k2);
+    }
+}

@@ -363,3 +363,87 @@ fn gpu_device_gids() -> Vec<String> {
 
     gids.into_iter().map(|g| g.to_string()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- GpuType::from_str ---------------------------------------------------
+
+    #[test]
+    fn gpu_type_vulkan_lowercase() {
+        assert!(matches!(GpuType::from_str("vulkan"), GpuType::Vulkan));
+    }
+
+    #[test]
+    fn gpu_type_vulkan_uppercase() {
+        assert!(matches!(GpuType::from_str("VULKAN"), GpuType::Vulkan));
+    }
+
+    #[test]
+    fn gpu_type_vulkan_mixed_case() {
+        assert!(matches!(GpuType::from_str("Vulkan"), GpuType::Vulkan));
+    }
+
+    #[test]
+    fn gpu_type_none_explicit() {
+        assert!(matches!(GpuType::from_str("none"), GpuType::None));
+    }
+
+    #[test]
+    fn gpu_type_unknown_string() {
+        assert!(matches!(GpuType::from_str("cuda"), GpuType::None));
+    }
+
+    #[test]
+    fn gpu_type_empty_string() {
+        assert!(matches!(GpuType::from_str(""), GpuType::None));
+    }
+
+    #[test]
+    fn gpu_type_garbage() {
+        assert!(matches!(GpuType::from_str("foobar"), GpuType::None));
+    }
+
+    // -- GpuType default -----------------------------------------------------
+
+    #[test]
+    fn gpu_type_default_is_none() {
+        assert!(matches!(GpuType::default(), GpuType::None));
+    }
+
+    // -- LlamacppConfig defaults ---------------------------------------------
+
+    #[test]
+    fn llamacpp_config_defaults() {
+        let cfg = LlamacppConfig::default();
+        assert_eq!(cfg.gpu_layers, 99);
+        assert_eq!(cfg.context_size, 4096);
+        assert_eq!(cfg.parallel, 1);
+        assert_eq!(cfg.uid, 10000);
+        assert!(cfg.model_id.is_empty());
+        assert!(cfg.gguf_path.is_empty());
+        assert!(cfg.api_key.is_empty());
+        assert!(cfg.extra_args.is_empty());
+        assert!(matches!(cfg.gpu_type, GpuType::None));
+    }
+
+    // -- DockerManager::llamacpp_base_url ------------------------------------
+    // This is a pure function; we can test its output format without Docker.
+
+    #[test]
+    fn llamacpp_base_url_format() {
+        let dm = DockerManager::test_dummy();
+        let url = dm.llamacpp_base_url("my-model-123");
+        assert_eq!(url, "http://sovereign-llamacpp-my-model-123:8080");
+    }
+
+    // -- Image selection constants -------------------------------------------
+
+    #[test]
+    fn image_constants_are_distinct() {
+        assert_ne!(LLAMACPP_IMAGE_CPU, LLAMACPP_IMAGE_VULKAN);
+        assert!(LLAMACPP_IMAGE_CPU.contains("llama.cpp"));
+        assert!(LLAMACPP_IMAGE_VULKAN.contains("vulkan"));
+    }
+}

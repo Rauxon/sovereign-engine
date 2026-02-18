@@ -154,3 +154,231 @@ impl AppConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal `AppConfig` with all fields defaulted. Override specific
+    /// fields in each test via struct update syntax.
+    fn base_config() -> AppConfig {
+        AppConfig {
+            listen_addr: "0.0.0.0:443".into(),
+            database_url: "sqlite://:memory:".into(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            bootstrap_user: None,
+            bootstrap_password: None,
+            break_glass: false,
+            docker_host: "unix:///var/run/docker.sock".into(),
+            model_path: "/models".into(),
+            model_host_path: "/models".into(),
+            ui_path: "/app/ui".into(),
+            external_url: "http://localhost:3000".into(),
+            backend_network: "sovereign-internal".into(),
+            acme_domain: None,
+            acme_contact: None,
+            acme_staging: false,
+            webui_backend_url: "http://open-webui:8080".into(),
+            webui_api_key: None,
+            queue_timeout_secs: 30,
+            secure_cookies: true,
+            db_encryption_key: None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // has_bootstrap_creds
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_bootstrap_creds_both_present() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: Some("secret".into()),
+            ..base_config()
+        };
+        assert!(cfg.has_bootstrap_creds());
+    }
+
+    #[test]
+    fn has_bootstrap_creds_user_only() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: None,
+            ..base_config()
+        };
+        assert!(!cfg.has_bootstrap_creds());
+    }
+
+    #[test]
+    fn has_bootstrap_creds_password_only() {
+        let cfg = AppConfig {
+            bootstrap_user: None,
+            bootstrap_password: Some("secret".into()),
+            ..base_config()
+        };
+        assert!(!cfg.has_bootstrap_creds());
+    }
+
+    #[test]
+    fn has_bootstrap_creds_neither() {
+        let cfg = base_config();
+        assert!(!cfg.has_bootstrap_creds());
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_bootstrap_creds
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_bootstrap_creds_correct() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: Some("hunter2".into()),
+            ..base_config()
+        };
+        assert!(cfg.validate_bootstrap_creds("admin", "hunter2"));
+    }
+
+    #[test]
+    fn validate_bootstrap_creds_wrong_password() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: Some("hunter2".into()),
+            ..base_config()
+        };
+        assert!(!cfg.validate_bootstrap_creds("admin", "wrong"));
+    }
+
+    #[test]
+    fn validate_bootstrap_creds_wrong_username() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: Some("hunter2".into()),
+            ..base_config()
+        };
+        assert!(!cfg.validate_bootstrap_creds("root", "hunter2"));
+    }
+
+    #[test]
+    fn validate_bootstrap_creds_empty_strings() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("admin".into()),
+            bootstrap_password: Some("hunter2".into()),
+            ..base_config()
+        };
+        assert!(!cfg.validate_bootstrap_creds("", ""));
+    }
+
+    #[test]
+    fn validate_bootstrap_creds_no_creds_configured() {
+        let cfg = base_config();
+        assert!(!cfg.validate_bootstrap_creds("admin", "hunter2"));
+    }
+
+    #[test]
+    fn validate_bootstrap_creds_empty_configured_and_provided() {
+        let cfg = AppConfig {
+            bootstrap_user: Some("".into()),
+            bootstrap_password: Some("".into()),
+            ..base_config()
+        };
+        assert!(cfg.validate_bootstrap_creds("", ""));
+    }
+
+    // -----------------------------------------------------------------------
+    // tls_paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tls_paths_both_present() {
+        let cfg = AppConfig {
+            tls_cert_path: Some("/cert.pem".into()),
+            tls_key_path: Some("/key.pem".into()),
+            ..base_config()
+        };
+        let (cert, key) = cfg.tls_paths().unwrap();
+        assert_eq!(cert, "/cert.pem");
+        assert_eq!(key, "/key.pem");
+    }
+
+    #[test]
+    fn tls_paths_missing_cert() {
+        let cfg = AppConfig {
+            tls_cert_path: None,
+            tls_key_path: Some("/key.pem".into()),
+            ..base_config()
+        };
+        let err = cfg.tls_paths().unwrap_err();
+        assert!(err.to_string().contains("TLS_CERT_PATH"));
+    }
+
+    #[test]
+    fn tls_paths_missing_key() {
+        let cfg = AppConfig {
+            tls_cert_path: Some("/cert.pem".into()),
+            tls_key_path: None,
+            ..base_config()
+        };
+        let err = cfg.tls_paths().unwrap_err();
+        assert!(err.to_string().contains("TLS_KEY_PATH"));
+    }
+
+    // -----------------------------------------------------------------------
+    // acme_config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn acme_config_both_present() {
+        let cfg = AppConfig {
+            acme_domain: Some("ai.example.com".into()),
+            acme_contact: Some("admin@example.com".into()),
+            acme_staging: false,
+            ..base_config()
+        };
+        let result = cfg.acme_config().unwrap();
+        assert_eq!(result, Some(("ai.example.com", "admin@example.com", false)));
+    }
+
+    #[test]
+    fn acme_config_both_present_staging() {
+        let cfg = AppConfig {
+            acme_domain: Some("ai.example.com".into()),
+            acme_contact: Some("admin@example.com".into()),
+            acme_staging: true,
+            ..base_config()
+        };
+        let result = cfg.acme_config().unwrap();
+        assert_eq!(result, Some(("ai.example.com", "admin@example.com", true)));
+    }
+
+    #[test]
+    fn acme_config_domain_without_contact_fails() {
+        let cfg = AppConfig {
+            acme_domain: Some("ai.example.com".into()),
+            acme_contact: None,
+            ..base_config()
+        };
+        let err = cfg.acme_config().unwrap_err();
+        assert!(err.to_string().contains("ACME_CONTACT"));
+    }
+
+    #[test]
+    fn acme_config_neither_set() {
+        let cfg = base_config();
+        let result = cfg.acme_config().unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn acme_config_contact_without_domain_returns_none() {
+        let cfg = AppConfig {
+            acme_domain: None,
+            acme_contact: Some("admin@example.com".into()),
+            ..base_config()
+        };
+        let result = cfg.acme_config().unwrap();
+        assert_eq!(result, None);
+    }
+}

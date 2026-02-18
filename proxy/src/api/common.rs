@@ -286,3 +286,207 @@ pub async fn lookup_backend_type(pool: &SqlitePool, model_id: &str) -> String {
         _ => "llamacpp".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bollard::models::{ContainerSummary, ContainerSummaryStateEnum};
+    use std::collections::HashMap;
+
+    // -----------------------------------------------------------------------
+    // period_to_interval
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn period_to_interval_hour() {
+        assert_eq!(period_to_interval("hour"), "-1 hour");
+    }
+
+    #[test]
+    fn period_to_interval_day() {
+        assert_eq!(period_to_interval("day"), "-1 day");
+    }
+
+    #[test]
+    fn period_to_interval_week() {
+        assert_eq!(period_to_interval("week"), "-7 days");
+    }
+
+    #[test]
+    fn period_to_interval_month() {
+        assert_eq!(period_to_interval("month"), "-30 days");
+    }
+
+    #[test]
+    fn period_to_interval_unknown_defaults_to_day() {
+        assert_eq!(period_to_interval("year"), "-1 day");
+        assert_eq!(period_to_interval("HOUR"), "-1 day"); // case-sensitive
+    }
+
+    #[test]
+    fn period_to_interval_empty_defaults_to_day() {
+        assert_eq!(period_to_interval(""), "-1 day");
+    }
+
+    // -----------------------------------------------------------------------
+    // period_to_interval_and_bucket
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn period_to_interval_and_bucket_hour() {
+        assert_eq!(
+            period_to_interval_and_bucket("hour"),
+            ("-1 hour", "%Y-%m-%dT%H:%M:00")
+        );
+    }
+
+    #[test]
+    fn period_to_interval_and_bucket_day() {
+        assert_eq!(
+            period_to_interval_and_bucket("day"),
+            ("-1 day", "%Y-%m-%dT%H:00:00")
+        );
+    }
+
+    #[test]
+    fn period_to_interval_and_bucket_week() {
+        assert_eq!(
+            period_to_interval_and_bucket("week"),
+            ("-7 days", "%Y-%m-%d")
+        );
+    }
+
+    #[test]
+    fn period_to_interval_and_bucket_month() {
+        assert_eq!(
+            period_to_interval_and_bucket("month"),
+            ("-30 days", "%Y-%m-%d")
+        );
+    }
+
+    #[test]
+    fn period_to_interval_and_bucket_unknown_defaults_to_day() {
+        assert_eq!(
+            period_to_interval_and_bucket("garbage"),
+            ("-1 day", "%Y-%m-%dT%H:00:00")
+        );
+    }
+
+    #[test]
+    fn period_to_interval_and_bucket_empty_defaults_to_day() {
+        assert_eq!(
+            period_to_interval_and_bucket(""),
+            ("-1 day", "%Y-%m-%dT%H:00:00")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_container_statuses
+    // -----------------------------------------------------------------------
+
+    fn make_container(
+        labels: Option<HashMap<String, String>>,
+        state: Option<ContainerSummaryStateEnum>,
+    ) -> ContainerSummary {
+        ContainerSummary {
+            labels,
+            state,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn extract_container_statuses_empty_input() {
+        let result = extract_container_statuses(vec![], &HashMap::new());
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_container_statuses_running_with_labels() {
+        let mut labels = HashMap::new();
+        labels.insert(
+            "sovereign-engine.model-id".to_string(),
+            "my-model".to_string(),
+        );
+        labels.insert("sovereign-engine.backend".to_string(), "vllm".to_string());
+        let containers = vec![make_container(
+            Some(labels),
+            Some(ContainerSummaryStateEnum::RUNNING),
+        )];
+
+        let mut vram = HashMap::new();
+        vram.insert("my-model".to_string(), 4096u64);
+
+        let statuses = extract_container_statuses(containers, &vram);
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].model_id, "my-model");
+        assert_eq!(statuses[0].backend_type, "vllm");
+        assert!(statuses[0].healthy);
+        assert_eq!(statuses[0].state.as_deref(), Some("running"));
+        assert_eq!(statuses[0].vram_used_mb, Some(4096));
+    }
+
+    #[test]
+    fn extract_container_statuses_stopped_without_labels() {
+        let containers = vec![make_container(
+            None,
+            Some(ContainerSummaryStateEnum::EXITED),
+        )];
+
+        let statuses = extract_container_statuses(containers, &HashMap::new());
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].model_id, ""); // default
+        assert_eq!(statuses[0].backend_type, "llamacpp"); // default
+        assert!(!statuses[0].healthy);
+        assert_eq!(statuses[0].state.as_deref(), Some("exited"));
+        assert_eq!(statuses[0].vram_used_mb, None);
+    }
+
+    #[test]
+    fn extract_container_statuses_no_state() {
+        let containers = vec![make_container(None, None)];
+        let statuses = extract_container_statuses(containers, &HashMap::new());
+        assert!(!statuses[0].healthy);
+        assert!(statuses[0].state.is_none());
+    }
+
+    #[test]
+    fn extract_container_statuses_vram_absent_for_model() {
+        let mut labels = HashMap::new();
+        labels.insert(
+            "sovereign-engine.model-id".to_string(),
+            "model-a".to_string(),
+        );
+        let containers = vec![make_container(
+            Some(labels),
+            Some(ContainerSummaryStateEnum::RUNNING),
+        )];
+
+        // vram_map has a different model
+        let mut vram = HashMap::new();
+        vram.insert("model-b".to_string(), 1024u64);
+
+        let statuses = extract_container_statuses(containers, &vram);
+        assert_eq!(statuses[0].model_id, "model-a");
+        assert_eq!(statuses[0].vram_used_mb, None);
+    }
+
+    #[test]
+    fn extract_container_statuses_multiple_containers() {
+        let mut labels1 = HashMap::new();
+        labels1.insert("sovereign-engine.model-id".to_string(), "m1".to_string());
+        let mut labels2 = HashMap::new();
+        labels2.insert("sovereign-engine.model-id".to_string(), "m2".to_string());
+
+        let containers = vec![
+            make_container(Some(labels1), Some(ContainerSummaryStateEnum::RUNNING)),
+            make_container(Some(labels2), Some(ContainerSummaryStateEnum::PAUSED)),
+        ];
+
+        let statuses = extract_container_statuses(containers, &HashMap::new());
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses[0].healthy);
+        assert!(!statuses[1].healthy);
+        assert_eq!(statuses[1].state.as_deref(), Some("paused"));
+    }
+}
