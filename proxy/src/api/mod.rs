@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod common;
 pub mod error;
 pub mod hf;
 pub mod openai;

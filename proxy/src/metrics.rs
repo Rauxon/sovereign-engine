@@ -218,29 +218,7 @@ async fn collect_snapshot(
 
     // Container statuses
     let containers = match docker.list_managed_containers().await {
-        Ok(list) => list
-            .into_iter()
-            .map(|c| {
-                let labels = c.labels.as_ref();
-                let model_id = labels
-                    .and_then(|l| l.get("sovereign-engine.model-id"))
-                    .cloned()
-                    .unwrap_or_default();
-                let backend_type = labels
-                    .and_then(|l| l.get("sovereign-engine.backend"))
-                    .cloned()
-                    .unwrap_or_else(|| "llamacpp".to_string());
-                let healthy = c.state == Some(bollard::models::ContainerSummaryStateEnum::RUNNING);
-                let vram_used_mb = vram_map.get(&model_id).copied();
-                ContainerStatus {
-                    model_id,
-                    backend_type,
-                    healthy,
-                    state: c.state.map(|s| format!("{:?}", s).to_lowercase()),
-                    vram_used_mb,
-                }
-            })
-            .collect(),
+        Ok(list) => crate::api::common::extract_container_statuses(list, &vram_map),
         Err(e) => {
             warn!(error = %e, "Failed to list containers for metrics");
             vec![]

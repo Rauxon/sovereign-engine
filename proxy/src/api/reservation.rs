@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use super::common;
 use super::error;
 use crate::auth::SessionAuth;
 use crate::scheduler::reservation::{ActiveReservation, Reservation, ReservationWithUser};
@@ -299,118 +300,25 @@ async fn user_start_container(
         }
     };
 
-    // Look up the model (same logic as admin start_container)
-    #[allow(clippy::type_complexity)]
-    let model: Option<(String, String, Option<String>, String, Option<i64>)> = match sqlx::query_as(
-        "SELECT id, hf_repo, filename, backend_type, context_length FROM models WHERE id = ?",
-    )
-    .bind(&req.model_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    {
-        Ok(m) => m,
-        Err(e) => return error::internal_error("reservation:start_container:lookup", e),
+    let params = common::StartContainerParams {
+        model_id: req.model_id,
+        backend_type: req.backend_type,
+        gpu_type: req.gpu_type,
+        gpu_layers: req.gpu_layers,
+        context_size: req.context_size,
+        parallel: req.parallel,
     };
 
-    let (model_id, hf_repo, filename, db_backend_type, db_context_length) = match model {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Model not found" })),
-            )
-                .into_response();
-        }
-    };
-
-    let backend_type = req.backend_type.as_deref().unwrap_or(&db_backend_type);
-
-    let uid = match state.docker.allocate_uid().await {
-        Ok(uid) => uid,
-        Err(e) => return error::internal_error("reservation:start_container:uid", e),
-    };
-    let api_key = Uuid::new_v4().to_string();
-
-    let container_result = match backend_type {
-        "llamacpp" => {
-            let safe_repo = hf_repo.replace('/', "--");
-            let gguf_path = match &filename {
-                Some(f) => format!("{}/{}", safe_repo, f),
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "No filename recorded for this model" })),
-                    )
-                        .into_response();
-                }
-            };
-
-            let parallel = req.parallel.unwrap_or(1).max(1);
-            let llamacpp_config = crate::docker::llamacpp::LlamacppConfig {
-                model_id: model_id.clone(),
-                gguf_path,
-                gpu_type: crate::docker::llamacpp::GpuType::from_str(
-                    req.gpu_type.as_deref().unwrap_or("none"),
-                ),
-                gpu_layers: req.gpu_layers.unwrap_or(99),
-                context_size: req
-                    .context_size
-                    .unwrap_or_else(|| db_context_length.map(|v| v as u32).unwrap_or(4096)),
-                parallel,
-                uid,
-                api_key: api_key.clone(),
-                ..Default::default()
-            };
-            state.docker.start_llamacpp(&llamacpp_config).await
-        }
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("Unknown backend type: {other}") })),
-            )
-                .into_response();
-        }
-    };
-
-    match container_result {
-        Ok(container_name) => {
-            info!(target: "audit", action = "reservation.container.start", actor = %session.user_id, reservation = %active.reservation_id, resource = %model_id, "Reservation holder started container");
-
-            let parallel_slots = req.parallel.unwrap_or(1).max(1);
-            if let Err(e) = sqlx::query(
-                "INSERT OR REPLACE INTO container_secrets (model_id, container_uid, api_key, parallel_slots) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&model_id)
-            .bind(uid as i64)
-            .bind(&api_key)
-            .bind(parallel_slots as i64)
-            .execute(&state.db.pool)
-            .await
-            {
-                error!(model = %model_id, error = %e, "Failed to persist container secrets");
-            }
-
-            state
-                .scheduler
-                .gate()
-                .register(&model_id, parallel_slots)
-                .await;
-
-            let _ = sqlx::query("UPDATE models SET loaded = 1 WHERE id = ?")
-                .bind(&model_id)
-                .execute(&state.db.pool)
-                .await;
-
+    match common::start_container_core(&state, &params).await {
+        Ok((container_name, url)) => {
+            info!(target: "audit", action = "reservation.container.start", actor = %session.user_id, reservation = %active.reservation_id, resource = %params.model_id, "Reservation holder started container");
             Json(serde_json::json!({
                 "container": container_name,
-                "url": state.docker.backend_base_url(&model_id, backend_type),
+                "url": url,
             }))
             .into_response()
         }
-        Err(e) => {
-            error!(model = %model_id, error = ?e, "Reservation holder failed to start container");
-            error::internal_error("reservation:start_container", e)
-        }
+        Err(response) => response,
     }
 }
 
@@ -432,16 +340,7 @@ async fn user_stop_container(
         }
     };
 
-    let backend_type: String =
-        match sqlx::query_as::<_, (String,)>("SELECT backend_type FROM models WHERE id = ?")
-            .bind(&req.model_id)
-            .fetch_optional(&state.db.pool)
-            .await
-        {
-            Ok(Some((bt,))) => bt,
-            Ok(None) => "llamacpp".to_string(),
-            Err(_) => "llamacpp".to_string(),
-        };
+    let backend_type = common::lookup_backend_type(&state.db.pool, &req.model_id).await;
 
     match state
         .docker
@@ -450,17 +349,7 @@ async fn user_stop_container(
     {
         Ok(_) => {
             info!(target: "audit", action = "reservation.container.stop", actor = %session.user_id, reservation = %active.reservation_id, resource = %req.model_id, "Reservation holder stopped container");
-
-            state.scheduler.gate().unregister(&req.model_id).await;
-            let _ = sqlx::query("DELETE FROM container_secrets WHERE model_id = ?")
-                .bind(&req.model_id)
-                .execute(&state.db.pool)
-                .await;
-            let _ = sqlx::query("UPDATE models SET loaded = 0 WHERE id = ?")
-                .bind(&req.model_id)
-                .execute(&state.db.pool)
-                .await;
-
+            common::post_stop_cleanup(&state, &req.model_id).await;
             Json(serde_json::json!({ "status": "stopped" })).into_response()
         }
         Err(e) => {

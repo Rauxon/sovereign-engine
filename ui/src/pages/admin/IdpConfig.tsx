@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getIdps, createIdp, updateIdp, deleteIdp } from '../../api';
 import type { IdP } from '../../types';
-import { useTheme } from '../../theme';
+import { useTheme, tableStyles, formStyles } from '../../theme';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ErrorAlert from '../../components/common/ErrorAlert';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
@@ -24,51 +24,8 @@ export default function IdpConfig() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const tableStyle: React.CSSProperties = {
-    width: '100%',
-    borderCollapse: 'collapse',
-    background: colors.tableBg,
-    borderRadius: 8,
-    overflow: 'hidden',
-    border: `1px solid ${colors.cardBorder}`,
-  };
-
-  const thStyle: React.CSSProperties = {
-    textAlign: 'left',
-    padding: '0.75rem 1rem',
-    background: colors.tableHeaderBg,
-    borderBottom: `1px solid ${colors.cardBorder}`,
-    fontSize: '0.85rem',
-    fontWeight: 600,
-    color: colors.tableHeaderText,
-    textTransform: 'uppercase',
-    letterSpacing: '0.03em',
-  };
-
-  const tdStyle: React.CSSProperties = {
-    padding: '0.75rem 1rem',
-    borderBottom: `1px solid ${colors.tableRowBorder}`,
-    fontSize: '0.9rem',
-  };
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '0.5rem 0.75rem',
-    border: `1px solid ${colors.inputBorder}`,
-    borderRadius: 4,
-    fontSize: '0.95rem',
-    boxSizing: 'border-box',
-    background: colors.inputBg,
-    color: colors.textPrimary,
-  };
-
-  const labelStyle: React.CSSProperties = {
-    display: 'block',
-    marginBottom: '0.35rem',
-    fontWeight: 600,
-    fontSize: '0.9rem',
-    color: colors.textSecondary,
-  };
+  const { table: tableStyle, th: thStyle, td: tdStyle } = tableStyles(colors);
+  const { input: inputStyle, label: labelStyle } = formStyles(colors);
 
   const fetchIdps = useCallback(async () => {
     setLoading(true);

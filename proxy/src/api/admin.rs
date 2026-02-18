@@ -10,20 +10,11 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 use uuid::Uuid;
 
+use super::common;
 use super::error;
 use crate::auth::SessionAuth;
-use crate::db::models::{IdpConfigPublic, Model, ModelCategory, User};
+use crate::db::models::{IdpConfigPublic, User};
 use crate::AppState;
-
-/// Row from `models` used by the start_container handler.
-#[derive(sqlx::FromRow)]
-struct ModelStartRow {
-    id: String,
-    hf_repo: String,
-    filename: Option<String>,
-    backend_type: String,
-    context_length: Option<i64>,
-}
 
 /// Row from `models` used by the estimate_vram handler.
 #[derive(sqlx::FromRow)]
@@ -299,15 +290,7 @@ async fn disable_idp(
 
 /// GET /api/admin/categories — List all model categories.
 async fn list_categories(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match sqlx::query_as::<_, ModelCategory>(
-        "SELECT id, name, description, preferred_model_id, created_at FROM model_categories",
-    )
-    .fetch_all(&state.db.pool)
-    .await
-    {
-        Ok(categories) => Json(serde_json::json!({ "categories": categories })).into_response(),
-        Err(e) => error::internal_error("list_categories", e),
-    }
+    common::fetch_all_categories(&state.db.pool).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,15 +448,7 @@ async fn delete_category(
 
 /// GET /api/admin/models — List all registered models.
 async fn list_models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match sqlx::query_as::<_, Model>(
-        "SELECT id, hf_repo, filename, size_bytes, category_id, loaded, backend_port, backend_type, last_used_at, created_at, context_length, n_layers, n_heads, n_kv_heads, embedding_length FROM models",
-    )
-    .fetch_all(&state.db.pool)
-    .await
-    {
-        Ok(models) => Json(serde_json::json!({ "models": models })).into_response(),
-        Err(e) => error::internal_error("list_models", e),
-    }
+    common::fetch_all_models(&state.db.pool).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -590,11 +565,7 @@ async fn delete_model(
             error!(model = %model_id, error = %e, "Failed to stop container during model delete");
             // Continue with deletion anyway — container may already be gone
         }
-        state.scheduler.gate().unregister(&model_id).await;
-        let _ = sqlx::query("DELETE FROM container_secrets WHERE model_id = ?")
-            .bind(&model_id)
-            .execute(&state.db.pool)
-            .await;
+        common::post_stop_cleanup(&state, &model_id).await;
     }
 
     // Delete model files from disk
@@ -725,30 +696,7 @@ async fn system_status(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 
     // Container health — list managed containers and check their state
     let containers = match state.docker.list_managed_containers().await {
-        Ok(containers) => containers
-            .into_iter()
-            .map(|c| {
-                let labels = c.labels.as_ref();
-                let model_id = labels
-                    .and_then(|l| l.get("sovereign-engine.model-id"))
-                    .cloned()
-                    .unwrap_or_default();
-                let backend_type = labels
-                    .and_then(|l| l.get("sovereign-engine.backend"))
-                    .cloned()
-                    .unwrap_or_else(|| "llamacpp".to_string());
-                let healthy = c.state == Some(bollard::models::ContainerSummaryStateEnum::RUNNING);
-                let state_str = c.state.map(|s| format!("{:?}", s).to_lowercase());
-                let vram_used_mb = vram_map.get(&model_id).copied();
-                serde_json::json!({
-                    "model_id": model_id,
-                    "backend_type": backend_type,
-                    "healthy": healthy,
-                    "state": state_str,
-                    "vram_used_mb": vram_used_mb,
-                })
-            })
-            .collect::<Vec<_>>(),
+        Ok(containers) => common::extract_container_statuses(containers, &vram_map),
         Err(_) => vec![],
     };
 
@@ -829,135 +777,25 @@ async fn start_container(
     Extension(session): Extension<SessionAuth>,
     Json(req): Json<StartContainerRequest>,
 ) -> impl IntoResponse {
-    // Look up the model
-    let model: Option<ModelStartRow> = match sqlx::query_as(
-        "SELECT id, hf_repo, filename, backend_type, context_length FROM models WHERE id = ?",
-    )
-    .bind(&req.model_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            return error::internal_error("start_container:lookup", e);
-        }
+    let params = common::StartContainerParams {
+        model_id: req.model_id,
+        backend_type: req.backend_type,
+        gpu_type: req.gpu_type,
+        gpu_layers: req.gpu_layers,
+        context_size: req.context_size,
+        parallel: req.parallel,
     };
 
-    let ModelStartRow {
-        id: model_id,
-        hf_repo,
-        filename,
-        backend_type: db_backend_type,
-        context_length: db_context_length,
-    } = match model {
-        Some(m) => m,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "Model not found" })),
-            )
-                .into_response();
-        }
-    };
-
-    let backend_type = req.backend_type.as_deref().unwrap_or(&db_backend_type);
-
-    // Allocate a collision-free UID and generate a per-container API key
-    let uid = match state.docker.allocate_uid().await {
-        Ok(uid) => uid,
-        Err(e) => {
-            return error::internal_error("start_container:allocate_uid", e);
-        }
-    };
-    let api_key = Uuid::new_v4().to_string();
-
-    let container_result = match backend_type {
-        "llamacpp" => {
-            // Build the GGUF path: <safe_repo>/<filename>
-            // Download saves to MODEL_PATH/<repo with / replaced by -->/<filename>
-            let safe_repo = hf_repo.replace('/', "--");
-            let gguf_path = match &filename {
-                Some(f) => format!("{}/{}", safe_repo, f),
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": "No filename recorded for this model — cannot determine GGUF file path" })),
-                    )
-                        .into_response();
-                }
-            };
-
-            let parallel = req.parallel.unwrap_or(1).max(1);
-            let llamacpp_config = crate::docker::llamacpp::LlamacppConfig {
-                model_id: model_id.clone(),
-                gguf_path,
-                gpu_type: crate::docker::llamacpp::GpuType::from_str(
-                    req.gpu_type.as_deref().unwrap_or("none"),
-                ),
-                gpu_layers: req.gpu_layers.unwrap_or(99),
-                context_size: req
-                    .context_size
-                    .unwrap_or_else(|| db_context_length.map(|v| v as u32).unwrap_or(4096)),
-                parallel,
-                uid,
-                api_key: api_key.clone(),
-                ..Default::default()
-            };
-            state.docker.start_llamacpp(&llamacpp_config).await
-        }
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("Unknown backend type: {other}") })),
-            )
-                .into_response();
-        }
-    };
-
-    match container_result {
-        Ok(container_name) => {
-            info!(target: "audit", action = "container.start", actor = %session.user_id, resource = %model_id, container = %container_name, backend = %backend_type, "Admin started container");
-
-            // Determine parallel slots (from request)
-            let parallel_slots = req.parallel.unwrap_or(1).max(1);
-
-            // Persist container secrets (UID + API key + parallel slots) for proxy recovery
-            if let Err(e) = sqlx::query(
-                "INSERT OR REPLACE INTO container_secrets (model_id, container_uid, api_key, parallel_slots) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&model_id)
-            .bind(uid as i64)
-            .bind(&api_key)
-            .bind(parallel_slots as i64)
-            .execute(&state.db.pool)
-            .await
-            {
-                error!(model = %model_id, error = %e, "Failed to persist container secrets");
-            }
-
-            // Register concurrency gate for this model
-            state
-                .scheduler
-                .gate()
-                .register(&model_id, parallel_slots)
-                .await;
-
-            // Update model record
-            let _ = sqlx::query("UPDATE models SET loaded = 1 WHERE id = ?")
-                .bind(&model_id)
-                .execute(&state.db.pool)
-                .await;
-
+    match common::start_container_core(&state, &params).await {
+        Ok((container_name, url)) => {
+            info!(target: "audit", action = "container.start", actor = %session.user_id, resource = %params.model_id, container = %container_name, "Admin started container");
             Json(serde_json::json!({
                 "container": container_name,
-                "url": state.docker.backend_base_url(&model_id, backend_type),
+                "url": url,
             }))
             .into_response()
         }
-        Err(e) => {
-            error!(model = %model_id, backend = %backend_type, error = ?e, "Failed to start container");
-            error::internal_error("start_container", e)
-        }
+        Err(response) => response,
     }
 }
 
@@ -1062,17 +900,7 @@ async fn stop_container(
     Extension(session): Extension<SessionAuth>,
     Json(req): Json<StopContainerRequest>,
 ) -> impl IntoResponse {
-    // Look up backend_type for this model
-    let backend_type: String =
-        match sqlx::query_as::<_, (String,)>("SELECT backend_type FROM models WHERE id = ?")
-            .bind(&req.model_id)
-            .fetch_optional(&state.db.pool)
-            .await
-        {
-            Ok(Some((bt,))) => bt,
-            Ok(None) => "llamacpp".to_string(),
-            Err(_) => "llamacpp".to_string(),
-        };
+    let backend_type = common::lookup_backend_type(&state.db.pool, &req.model_id).await;
 
     info!(model = %req.model_id, backend = %backend_type, "Stopping container");
     match state
@@ -1082,22 +910,7 @@ async fn stop_container(
     {
         Ok(_) => {
             info!(target: "audit", action = "container.stop", actor = %session.user_id, resource = %req.model_id, backend = %backend_type, "Admin stopped container");
-
-            // Unregister concurrency gate
-            state.scheduler.gate().unregister(&req.model_id).await;
-
-            // Clean up container secrets
-            let _ = sqlx::query("DELETE FROM container_secrets WHERE model_id = ?")
-                .bind(&req.model_id)
-                .execute(&state.db.pool)
-                .await;
-
-            // Update model record
-            let _ = sqlx::query("UPDATE models SET loaded = 0 WHERE id = ?")
-                .bind(&req.model_id)
-                .execute(&state.db.pool)
-                .await;
-
+            common::post_stop_cleanup(&state, &req.model_id).await;
             Json(serde_json::json!({ "status": "stopped" })).into_response()
         }
         Err(e) => {
@@ -1211,13 +1024,7 @@ async fn admin_usage(
     Query(params): Query<AdminUsageQuery>,
 ) -> impl IntoResponse {
     let period = params.period.unwrap_or_else(|| "day".to_string());
-    let interval = match period.as_str() {
-        "hour" => "-1 hour",
-        "day" => "-1 day",
-        "week" => "-7 days",
-        "month" => "-30 days",
-        _ => "-1 day",
-    };
+    let interval = common::period_to_interval(&period);
 
     // Global summary
     let summary: (i64, i64, i64) = sqlx::query_as(
@@ -1265,13 +1072,7 @@ async fn admin_usage_timeline(
     Query(params): Query<AdminUsageQuery>,
 ) -> impl IntoResponse {
     let period = params.period.unwrap_or_else(|| "day".to_string());
-    let (interval, time_bucket) = match period.as_str() {
-        "hour" => ("-1 hour", "%Y-%m-%dT%H:%M:00"),
-        "day" => ("-1 day", "%Y-%m-%dT%H:00:00"),
-        "week" => ("-7 days", "%Y-%m-%d"),
-        "month" => ("-30 days", "%Y-%m-%d"),
-        _ => ("-1 day", "%Y-%m-%dT%H:00:00"),
-    };
+    let (interval, time_bucket) = common::period_to_interval_and_bucket(&period);
 
     let timeline = sqlx::query_as::<_, (String, String, i64, i64, i64)>(&format!(
         r#"

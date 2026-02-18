@@ -11,10 +11,11 @@ use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::info;
 
+use super::common;
 use super::error;
 use crate::auth::tokens;
 use crate::auth::SessionAuth;
-use crate::db::models::{Model, ModelCategory, TokenListItem};
+use crate::db::models::TokenListItem;
 use crate::AppState;
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -136,13 +137,7 @@ async fn usage_stats(
     Query(params): Query<UsageQuery>,
 ) -> impl IntoResponse {
     let period = params.period.unwrap_or_else(|| "day".to_string());
-    let interval = match period.as_str() {
-        "hour" => "-1 hour",
-        "day" => "-1 day",
-        "week" => "-7 days",
-        "month" => "-30 days",
-        _ => "-1 day",
-    };
+    let interval = common::period_to_interval(&period);
 
     // Summary totals
     let summary: (i64, i64, i64) = sqlx::query_as(
@@ -240,13 +235,7 @@ async fn usage_timeline(
     Query(params): Query<UsageQuery>,
 ) -> impl IntoResponse {
     let period = params.period.unwrap_or_else(|| "day".to_string());
-    let (interval, time_bucket) = match period.as_str() {
-        "hour" => ("-1 hour", "%Y-%m-%dT%H:%M:00"),
-        "day" => ("-1 day", "%Y-%m-%dT%H:00:00"),
-        "week" => ("-7 days", "%Y-%m-%d"),
-        "month" => ("-30 days", "%Y-%m-%d"),
-        _ => ("-1 day", "%Y-%m-%dT%H:00:00"),
-    };
+    let (interval, time_bucket) = common::period_to_interval_and_bucket(&period);
 
     let timeline = sqlx::query_as::<_, (String, String, i64, i64, i64)>(&format!(
         r#"
@@ -334,15 +323,7 @@ async fn usage_timeline(
 
 /// GET /api/user/categories — List available categories.
 async fn list_categories(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match sqlx::query_as::<_, ModelCategory>(
-        "SELECT id, name, description, preferred_model_id, created_at FROM model_categories",
-    )
-    .fetch_all(&state.db.pool)
-    .await
-    {
-        Ok(categories) => Json(serde_json::json!({ "categories": categories })).into_response(),
-        Err(e) => error::internal_error("user:list_categories", e),
-    }
+    common::fetch_all_categories(&state.db.pool).await
 }
 
 // ---------------------------------------------------------------------------
@@ -351,15 +332,7 @@ async fn list_categories(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
 /// GET /api/user/models — List all registered models.
 async fn list_models(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match sqlx::query_as::<_, Model>(
-        "SELECT id, hf_repo, filename, size_bytes, category_id, loaded, backend_port, backend_type, last_used_at, created_at, context_length, n_layers, n_heads, n_kv_heads, embedding_length FROM models",
-    )
-    .fetch_all(&state.db.pool)
-    .await
-    {
-        Ok(models) => Json(serde_json::json!({ "models": models })).into_response(),
-        Err(e) => error::internal_error("user:list_models", e),
-    }
+    common::fetch_all_models(&state.db.pool).await
 }
 
 // ---------------------------------------------------------------------------

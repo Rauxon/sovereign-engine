@@ -9,7 +9,7 @@ import {
   getCalendarReservations,
 } from '../../api';
 import type { ReservationWithUser, ReservationStatus } from '../../types';
-import { useTheme } from '../../theme';
+import { useTheme, tableStyles } from '../../theme';
 import { useEventStream } from '../../hooks/useEventStream';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ErrorAlert from '../../components/common/ErrorAlert';
@@ -248,32 +248,7 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
   const pending = reservations.filter((r) => r.status === 'pending');
   const activeRes = reservations.find((r) => r.status === 'active');
 
-  const tableStyle: React.CSSProperties = {
-    width: '100%',
-    borderCollapse: 'collapse',
-    background: colors.tableBg,
-    borderRadius: 8,
-    overflow: 'hidden',
-    border: `1px solid ${colors.cardBorder}`,
-  };
-
-  const thStyle: React.CSSProperties = {
-    textAlign: 'left',
-    padding: '0.75rem 1rem',
-    background: colors.tableHeaderBg,
-    borderBottom: `1px solid ${colors.cardBorder}`,
-    fontSize: '0.85rem',
-    fontWeight: 600,
-    color: colors.tableHeaderText,
-    textTransform: 'uppercase',
-    letterSpacing: '0.03em',
-  };
-
-  const tdStyle: React.CSSProperties = {
-    padding: '0.75rem 1rem',
-    borderBottom: `1px solid ${colors.tableRowBorder}`,
-    fontSize: '0.9rem',
-  };
+  const { table: tableStyle, th: thStyle, td: tdStyle } = tableStyles(colors);
 
   const btnSmall = (bg: string, disabled = false): React.CSSProperties => ({
     padding: '0.2rem 0.5rem',
