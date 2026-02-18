@@ -26,7 +26,6 @@ export interface UserToken {
 }
 
 export interface MintedToken {
-  id: string;
   token: string;
   name: string;
   warning: string;
@@ -36,7 +35,7 @@ export interface MintTokenRequest {
   name: string;
   category_id: string | null;
   specific_model_id: string | null;
-  expires_at: string | null;
+  expires_in_days: number | null;
 }
 
 // ---- Usage ----

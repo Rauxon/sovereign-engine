@@ -108,7 +108,6 @@ describe('TokenMintForm', () => {
 
   it('calls mintToken API on submit and shows minted token', async () => {
     mockedMintToken.mockResolvedValue({
-      id: 'tok-1',
       token: 'sk-abc123secret',
       name: 'my-token',
       warning: '',
@@ -128,7 +127,7 @@ describe('TokenMintForm', () => {
         name: 'my-token',
         category_id: null,
         specific_model_id: null,
-        expires_at: null,
+        expires_in_days: 90,
       });
     });
 
@@ -162,7 +161,6 @@ describe('TokenMintForm', () => {
   it('calls onMinted callback after successful mint', async () => {
     const onMinted = vi.fn();
     mockedMintToken.mockResolvedValue({
-      id: 'tok-1',
       token: 'sk-xyz',
       name: 'test',
       warning: '',
@@ -191,9 +189,46 @@ describe('TokenMintForm', () => {
     });
   });
 
+  it('renders "Expires In" dropdown defaulting to 90 days', async () => {
+    renderForm();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Expires In')).toBeTruthy();
+    });
+
+    const select = screen.getByLabelText('Expires In') as HTMLSelectElement;
+    expect(select.value).toBe('90');
+  });
+
+  it('sends selected expires_in_days value to mintToken', async () => {
+    mockedMintToken.mockResolvedValue({
+      token: 'sk-expiry-test',
+      name: 'expiry-token',
+      warning: '',
+    });
+
+    renderForm();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Token Name *')).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Token Name *'), { target: { value: 'expiry-token' } });
+    fireEvent.change(screen.getByLabelText('Expires In'), { target: { value: '30' } });
+    fireEvent.submit(screen.getByText('Create Token').closest('form')!);
+
+    await waitFor(() => {
+      expect(mockedMintToken).toHaveBeenCalledWith({
+        name: 'expiry-token',
+        category_id: null,
+        specific_model_id: null,
+        expires_in_days: 30,
+      });
+    });
+  });
+
   it('returns to form when "Create Another" is clicked after minting', async () => {
     mockedMintToken.mockResolvedValue({
-      id: 'tok-1',
       token: 'sk-abc',
       name: 'my-token',
       warning: '',

@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
@@ -21,6 +21,7 @@ use crate::AppState;
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/tokens", get(list_tokens).post(create_token))
+        .route("/tokens/{id}", delete(delete_token))
         .route("/tokens/{id}/revoke", post(revoke_token))
         .route("/usage", get(usage_stats))
         .route("/usage/timeline", get(usage_timeline))
@@ -41,7 +42,7 @@ async fn list_tokens(
     Extension(session): Extension<SessionAuth>,
 ) -> impl IntoResponse {
     match sqlx::query_as::<_, TokenListItem>(
-        "SELECT t.id, t.name, t.category_id, mc.name AS category_name, t.specific_model_id, t.expires_at, t.revoked, t.created_at FROM tokens t LEFT JOIN model_categories mc ON mc.id = t.category_id WHERE t.user_id = ? AND t.internal = 0 AND t.meta = 0",
+        "SELECT t.id, t.name, t.category_id, mc.name AS category_name, t.specific_model_id, t.expires_at, t.revoked, t.created_at FROM tokens t LEFT JOIN model_categories mc ON mc.id = t.category_id WHERE t.user_id = ? AND t.internal = 0 AND t.meta = 0 AND t.deleted_at IS NULL",
     )
     .bind(&session.user_id)
     .fetch_all(&state.db.pool)
@@ -118,6 +119,34 @@ async fn revoke_token(
                 error::internal_error("revoke_token", e)
             }
         }
+    }
+}
+
+/// DELETE /api/user/tokens/:id — Soft-delete a token (sets deleted_at, preserves for usage logs).
+async fn delete_token(
+    State(state): State<Arc<AppState>>,
+    Extension(session): Extension<SessionAuth>,
+    Path(token_id): Path<String>,
+) -> impl IntoResponse {
+    let result = sqlx::query(
+        "UPDATE tokens SET deleted_at = datetime('now'), revoked = 1 WHERE id = ? AND user_id = ? AND internal = 0 AND meta = 0 AND deleted_at IS NULL",
+    )
+    .bind(&token_id)
+    .bind(&session.user_id)
+    .execute(&state.db.pool)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => {
+            info!(target: "audit", action = "token.delete", actor = %session.user_id, resource = %token_id, "User deleted API token");
+            Json(serde_json::json!({ "status": "deleted" })).into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Token not found" })),
+        )
+            .into_response(),
+        Err(e) => error::internal_error("delete_token", e),
     }
 }
 

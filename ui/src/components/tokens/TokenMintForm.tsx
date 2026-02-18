@@ -25,6 +25,7 @@ export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: Readonly<
   const [name, setName] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [specificModelId, setSpecificModelId] = useState('');
+  const [expiresInDays, setExpiresInDays] = useState<number | null>(90);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
@@ -62,6 +63,7 @@ export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: Readonly<
     setName('');
     setCategoryId('');
     setSpecificModelId('');
+    setExpiresInDays(90);
     setShowAdvanced(false);
   };
 
@@ -76,7 +78,7 @@ export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: Readonly<
         name: name.trim(),
         category_id: categoryId || null,
         specific_model_id: specificModelId.trim() || null,
-        expires_at: null,
+        expires_in_days: expiresInDays,
       });
       setMinted(result);
       resetForm();
@@ -177,6 +179,22 @@ export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: Readonly<
               ))}
             </select>
           )}
+        </div>
+
+        <div style={{ marginBottom: '1rem' }}>
+          <label htmlFor={`${idPrefix}-token-expiry`} style={form.label}>Expires In</label>
+          <select
+            id={`${idPrefix}-token-expiry`}
+            value={expiresInDays ?? ''}
+            onChange={(e) => setExpiresInDays(e.target.value === '' ? null : Number(e.target.value))}
+            style={{ ...form.input, background: colors.inputBg }}
+          >
+            <option value="30">30 days</option>
+            <option value="60">60 days</option>
+            <option value="90">90 days</option>
+            <option value="180">180 days</option>
+            <option value="365">1 year</option>
+          </select>
         </div>
 
         <div style={{ marginBottom: '1.25rem' }}>

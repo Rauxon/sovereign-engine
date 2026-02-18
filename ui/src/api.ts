@@ -127,6 +127,12 @@ export async function revokeToken(id: string): Promise<void> {
   });
 }
 
+export async function deleteToken(id: string): Promise<void> {
+  await request<{ status: string }>(`/api/user/tokens/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ---- User: Models ----
 
 export async function getUserModels(): Promise<AdminModel[]> {

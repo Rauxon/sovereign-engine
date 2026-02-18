@@ -7,6 +7,7 @@ import {
   getUserTokens,
   mintToken,
   revokeToken,
+  deleteToken,
   getUserModels,
   getDiskUsage,
   getHfRepoFiles,
@@ -369,8 +370,8 @@ describe('logout()', () => {
 
 describe('mintToken()', () => {
   it('sends POST with request body and returns minted token', async () => {
-    const req = { name: 'dev', category_id: null, specific_model_id: null, expires_at: null };
-    const minted = { id: 't1', token: 'sk-abc', name: 'dev', warning: 'save this' };
+    const req = { name: 'dev', category_id: null, specific_model_id: null, expires_in_days: 90 };
+    const minted = { token: 'sk-abc', name: 'dev', warning: 'save this' };
     mockFetch.mockResolvedValueOnce(okResponse(minted));
 
     const result = await mintToken(req);
@@ -619,6 +620,19 @@ describe('deleteReservation()', () => {
 
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/admin/reservations/r1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+});
+
+describe('deleteToken()', () => {
+  it('sends DELETE to /api/user/tokens/:id with encoded ID', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
+
+    await deleteToken('tok/123');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/user/tokens/tok%2F123',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });
