@@ -619,7 +619,6 @@ async fn download_files_to_disk(
     download_id: &str,
     downloadable: &[HfFileEntry],
     dest_dir: &str,
-    hf_token: &Option<String>,
     hf_repo: &str,
 ) -> Result<u64, ()> {
     if let Err(e) = tokio::fs::create_dir_all(dest_dir).await {
@@ -641,15 +640,14 @@ async fn download_files_to_disk(
             return Err(());
         }
 
-        download_single_file(
+        total_downloaded += download_single_file(
             client,
             downloads,
             download_id,
             file,
             dest_dir,
-            hf_token,
             hf_repo,
-            &mut total_downloaded,
+            total_downloaded,
         )
         .await?;
     }
@@ -665,17 +663,17 @@ async fn is_download_cancelled(downloads: &Downloads, download_id: &str) -> bool
 }
 
 /// Download a single file from HuggingFace to disk with progress tracking.
-/// Updates `total_downloaded` as bytes are written.
+/// `progress_offset` is the cumulative bytes already downloaded (for progress reporting).
+/// Returns the number of bytes downloaded for this file.
 async fn download_single_file(
     client: &reqwest::Client,
     downloads: &Downloads,
     download_id: &str,
     file: &HfFileEntry,
     dest_dir: &str,
-    hf_token: &Option<String>,
     hf_repo: &str,
-    total_downloaded: &mut u64,
-) -> Result<(), ()> {
+    progress_offset: u64,
+) -> Result<u64, ()> {
     // Reject path components that could escape the destination directory
     if file.path.contains("..") || file.path.starts_with('/') {
         set_download_error(
@@ -726,7 +724,7 @@ async fn download_single_file(
         let hint = if status == reqwest::StatusCode::UNAUTHORIZED
             || status == reqwest::StatusCode::FORBIDDEN
         {
-            if hf_token.is_some() {
+            if std::env::var("HF_TOKEN").is_ok() {
                 " — HF_TOKEN may lack access to this gated model"
             } else {
                 " — this may be a gated model; set HF_TOKEN env var to authenticate"
@@ -757,6 +755,7 @@ async fn download_single_file(
         }
     };
 
+    let mut file_downloaded: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk_result) = stream.next().await {
         // Check for cancellation periodically
@@ -779,12 +778,12 @@ async fn download_single_file(
                     return Err(());
                 }
 
-                *total_downloaded += chunk.len() as u64;
+                file_downloaded += chunk.len() as u64;
 
                 // Update progress
                 let mut dls = downloads.write().await;
                 if let Some(dl) = dls.get_mut(download_id) {
-                    dl.progress_bytes = *total_downloaded;
+                    dl.progress_bytes = progress_offset + file_downloaded;
                 }
             }
             Err(e) => {
@@ -799,7 +798,7 @@ async fn download_single_file(
         }
     }
 
-    Ok(())
+    Ok(file_downloaded)
 }
 
 /// Detect the primary model file from a list of downloaded files.
@@ -884,7 +883,6 @@ async fn run_download(
         &download_id,
         &downloadable,
         &dest_dir,
-        &hf_token,
         &hf_repo,
     )
     .await
