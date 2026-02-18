@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useTheme } from '../../theme';
 import { createReservation } from '../../api';
 
@@ -26,6 +26,11 @@ export default function ReservationRequestDialog({
   onCancel,
 }: ReservationRequestDialogProps) {
   const { colors } = useTheme();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
   const [editStart, setEditStart] = useState(() => toDatetimeLocal(startTime));
   const [editEnd, setEditEnd] = useState(() => toDatetimeLocal(endTime));
   const [reason, setReason] = useState('');
@@ -62,31 +67,11 @@ export default function ReservationRequestDialog({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Request Reservation"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: colors.overlayBg,
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-      }}
-      onClick={onCancel}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onCancel();
-        }
-      }}
-    >
-      <div
+    <>
+      <style>{`.reservation-request-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="reservation-request-dialog"
         style={{
           background: colors.dialogBg,
           borderRadius: 8,
@@ -94,9 +79,14 @@ export default function ReservationRequestDialog({
           maxWidth: 440,
           width: '90%',
           boxShadow: colors.dialogShadow,
+          border: 'none',
+          outline: 'none',
+          color: 'inherit',
         }}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
+        onClose={onCancel}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
       >
         <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>Request Reservation</h3>
 
@@ -207,7 +197,7 @@ export default function ReservationRequestDialog({
             {submitting ? 'Submitting...' : 'Request Booking'}
           </button>
         </div>
-      </div>
-    </div>
+      </dialog>
+    </>
   );
 }

@@ -39,6 +39,11 @@ const GPU_LABELS: Record<string, string> = {
 
 export default function StartModelDialog({ model, availableGpuTypes, onStarted, onCancel }: StartModelDialogProps) {
   const { colors } = useTheme();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
 
   const defaultContext = model.context_length
     ? Math.min(model.context_length, 4096)
@@ -123,38 +128,30 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
     color: colors.textSecondary,
   };
 
+  const handleClose = () => {
+    onCancel();
+  };
+
   return (
-    <button
-      type="button"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100vw',
-        height: '100vh',
-        background: colors.overlayBg,
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-        border: 'none',
-        padding: 0,
-        cursor: 'default',
-      }}
-      onClick={onCancel}
-    >
-      <div
-        role="dialog"
-        aria-label="Start Model"
+    <>
+      <style>{`.start-model-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="start-model-dialog"
         style={{
-          background: colors.dialogBg,
+          border: 'none',
           borderRadius: 8,
           padding: '1.5rem',
           maxWidth: 520,
           width: '90%',
           boxShadow: colors.dialogShadow,
+          background: colors.dialogBg,
+          color: 'inherit',
         }}
-        onClick={(e) => e.stopPropagation()}
+        onClose={handleClose}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
       >
         {/* Header */}
         <h3 style={{ margin: '0 0 0.25rem', color: colors.textPrimary }}>Start Model</h3>
@@ -324,7 +321,7 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
             {starting ? 'Starting...' : 'Start'}
           </button>
         </div>
-      </div>
-    </button>
+      </dialog>
+    </>
   );
 }

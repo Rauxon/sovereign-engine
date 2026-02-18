@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getUserReservations,
   getCalendarReservations,
@@ -26,6 +26,127 @@ function formatDateTime(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+/** Inner dialog component so useEffect fires on mount/unmount with showModal(). */
+function UserMyReservationsDialog({
+  reservations,
+  colors,
+  tableStyle,
+  thStyle,
+  tdStyle,
+  onClose,
+  onCancelReservation,
+}: Readonly<{
+  reservations: Reservation[];
+  colors: import('../../theme').ThemeColors;
+  tableStyle: React.CSSProperties;
+  thStyle: React.CSSProperties;
+  tdStyle: React.CSSProperties;
+  onClose: () => void;
+  onCancelReservation: (id: string) => void;
+}>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  return (
+    <>
+      <style>{`.user-reservation-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="user-reservation-dialog"
+        style={{
+          background: colors.dialogBg,
+          borderRadius: 8,
+          padding: '1.5rem',
+          maxWidth: 700,
+          width: '90%',
+          maxHeight: '80vh',
+          overflowY: 'auto',
+          boxShadow: colors.dialogShadow,
+          border: 'none',
+          outline: 'none',
+          color: 'inherit',
+        }}
+        onClose={onClose}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 1rem' }}>
+          <h3 style={{ margin: 0, color: colors.textPrimary }}>My Reservations</h3>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: colors.textMuted,
+              fontSize: '1.2rem',
+              cursor: 'pointer',
+              padding: '0.25rem 0.5rem',
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        {reservations.length === 0 ? (
+          <p style={{ color: colors.textMuted }}>No reservations yet. Click on the calendar to book a slot.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Start</th>
+                  <th style={thStyle}>End</th>
+                  <th style={thStyle}>Reason</th>
+                  <th style={thStyle}>Admin Note</th>
+                  <th style={thStyle}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reservations.map((r) => (
+                  <tr key={r.id}>
+                    <td style={tdStyle}><ReservationStatusBadge status={r.status} /></td>
+                    <td style={tdStyle}>{formatDateTime(r.start_time)}</td>
+                    <td style={tdStyle}>{formatDateTime(r.end_time)}</td>
+                    <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.reason || '-'}
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.admin_note || '-'}
+                    </td>
+                    <td style={tdStyle}>
+                      {(r.status === 'pending' || r.status === 'approved') && (
+                        <button
+                          onClick={() => onCancelReservation(r.id)}
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            background: colors.buttonDanger,
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </dialog>
+    </>
+  );
 }
 
 export default function Reservations({ userId }: Readonly<{ userId: string }>) {
@@ -301,114 +422,15 @@ export default function Reservations({ userId }: Readonly<{ userId: string }>) {
 
       {/* My Reservations modal */}
       {showMyReservations && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="My Reservations"
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: colors.overlayBg,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setShowMyReservations(false)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              setShowMyReservations(false);
-            }
-          }}
-        >
-          <div
-            style={{
-              background: colors.dialogBg,
-              borderRadius: 8,
-              padding: '1.5rem',
-              maxWidth: 700,
-              width: '90%',
-              maxHeight: '80vh',
-              overflowY: 'auto',
-              boxShadow: colors.dialogShadow,
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 1rem' }}>
-              <h3 style={{ margin: 0, color: colors.textPrimary }}>My Reservations</h3>
-              <button
-                onClick={() => setShowMyReservations(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: colors.textMuted,
-                  fontSize: '1.2rem',
-                  cursor: 'pointer',
-                  padding: '0.25rem 0.5rem',
-                  lineHeight: 1,
-                }}
-              >
-                ✕
-              </button>
-            </div>
-            {reservations.length === 0 ? (
-              <p style={{ color: colors.textMuted }}>No reservations yet. Click on the calendar to book a slot.</p>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={tableStyle}>
-                  <thead>
-                    <tr>
-                      <th style={thStyle}>Status</th>
-                      <th style={thStyle}>Start</th>
-                      <th style={thStyle}>End</th>
-                      <th style={thStyle}>Reason</th>
-                      <th style={thStyle}>Admin Note</th>
-                      <th style={thStyle}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reservations.map((r) => (
-                      <tr key={r.id}>
-                        <td style={tdStyle}><ReservationStatusBadge status={r.status} /></td>
-                        <td style={tdStyle}>{formatDateTime(r.start_time)}</td>
-                        <td style={tdStyle}>{formatDateTime(r.end_time)}</td>
-                        <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.reason || '-'}
-                        </td>
-                        <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.admin_note || '-'}
-                        </td>
-                        <td style={tdStyle}>
-                          {(r.status === 'pending' || r.status === 'approved') && (
-                            <button
-                              onClick={() => setConfirmCancel(r.id)}
-                              style={{
-                                padding: '0.2rem 0.5rem',
-                                background: colors.buttonDanger,
-                                color: '#fff',
-                                border: 'none',
-                                borderRadius: 4,
-                                cursor: 'pointer',
-                                fontSize: '0.8rem',
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
+        <UserMyReservationsDialog
+          reservations={reservations}
+          colors={colors}
+          tableStyle={tableStyle}
+          thStyle={thStyle}
+          tdStyle={tdStyle}
+          onClose={() => setShowMyReservations(false)}
+          onCancelReservation={(id) => setConfirmCancel(id)}
+        />
       )}
     </div>
   );

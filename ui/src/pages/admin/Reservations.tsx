@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getAdminReservations,
   approveReservation,
@@ -27,6 +27,128 @@ function formatDateTime(iso: string): string {
 }
 
 type StatusFilter = 'all' | ReservationStatus;
+
+/** Inner dialog component so useEffect fires on mount/unmount with showModal(). */
+function AdminApproveRejectDialog({
+  pendingAction,
+  noteInput,
+  setNoteInput,
+  acting,
+  colors,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  pendingAction: { id: string; action: 'approve' | 'reject' };
+  noteInput: string;
+  setNoteInput: (v: string) => void;
+  acting: boolean;
+  colors: import('../../theme').ThemeColors;
+  onCancel: () => void;
+  onConfirm: () => void;
+}>) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  const isApprove = pendingAction.action === 'approve';
+  let actionBg: string;
+  let actionLabel: string;
+  if (acting) {
+    actionBg = colors.buttonPrimaryDisabled;
+    actionLabel = 'Processing...';
+  } else if (isApprove) {
+    actionBg = colors.successText;
+    actionLabel = 'Approve';
+  } else {
+    actionBg = colors.buttonDanger;
+    actionLabel = 'Reject';
+  }
+
+  return (
+    <>
+      <style>{`.admin-reservation-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="admin-reservation-dialog"
+        style={{
+          background: colors.dialogBg,
+          borderRadius: 8,
+          padding: '1.5rem',
+          maxWidth: 420,
+          width: '90%',
+          boxShadow: colors.dialogShadow,
+          border: 'none',
+          outline: 'none',
+          color: 'inherit',
+        }}
+        onClose={onCancel}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
+      >
+        <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>
+          {isApprove ? 'Approve' : 'Reject'} Reservation
+        </h3>
+        <div style={{ marginBottom: '0.75rem' }}>
+          <label htmlFor="admin-reservation-note" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>
+            Note (optional)
+          </label>
+          <textarea
+            id="admin-reservation-note"
+            value={noteInput}
+            onChange={(e) => setNoteInput(e.target.value)}
+            rows={2}
+            style={{
+              width: '100%',
+              padding: '0.5rem',
+              border: `1px solid ${colors.inputBorder}`,
+              borderRadius: 4,
+              fontSize: '0.9rem',
+              boxSizing: 'border-box',
+              background: colors.inputBg,
+              color: colors.textPrimary,
+              resize: 'vertical',
+              fontFamily: 'inherit',
+            }}
+          />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+          <button
+            onClick={onCancel}
+            disabled={acting}
+            style={{
+              padding: '0.5rem 1rem',
+              background: colors.buttonDisabled,
+              color: colors.textSecondary,
+              border: 'none',
+              borderRadius: 4,
+              cursor: acting ? 'default' : 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={acting}
+            style={{
+              padding: '0.5rem 1rem',
+              background: actionBg,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              cursor: acting ? 'default' : 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            {actionLabel}
+          </button>
+        </div>
+      </dialog>
+    </>
+  );
+}
 
 export default function AdminReservations({ userId }: Readonly<{ userId: string }>) {
   const { colors } = useTheme();
@@ -362,118 +484,15 @@ export default function AdminReservations({ userId }: Readonly<{ userId: string 
 
       {/* Approve/Reject dialog with note */}
       {pendingAction && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${pendingAction.action === 'approve' ? 'Approve' : 'Reject'} Reservation`}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: colors.overlayBg,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setPendingAction(null)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              setPendingAction(null);
-            }
-          }}
-        >
-          <div
-            style={{
-              background: colors.dialogBg,
-              borderRadius: 8,
-              padding: '1.5rem',
-              maxWidth: 420,
-              width: '90%',
-              boxShadow: colors.dialogShadow,
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>
-              {pendingAction.action === 'approve' ? 'Approve' : 'Reject'} Reservation
-            </h3>
-            <div style={{ marginBottom: '0.75rem' }}>
-              <label htmlFor="admin-reservation-note" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>
-                Note (optional)
-              </label>
-              <textarea
-                id="admin-reservation-note"
-                value={noteInput}
-                onChange={(e) => setNoteInput(e.target.value)}
-                rows={2}
-                style={{
-                  width: '100%',
-                  padding: '0.5rem',
-                  border: `1px solid ${colors.inputBorder}`,
-                  borderRadius: 4,
-                  fontSize: '0.9rem',
-                  boxSizing: 'border-box',
-                  background: colors.inputBg,
-                  color: colors.textPrimary,
-                  resize: 'vertical',
-                  fontFamily: 'inherit',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-              <button
-                onClick={() => setPendingAction(null)}
-                disabled={acting}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: colors.buttonDisabled,
-                  color: colors.textSecondary,
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: acting ? 'default' : 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              {(() => {
-                const isApprove = pendingAction.action === 'approve';
-                let actionBg: string;
-                let actionLabel: string;
-                if (acting) {
-                  actionBg = colors.buttonPrimaryDisabled;
-                  actionLabel = 'Processing...';
-                } else if (isApprove) {
-                  actionBg = colors.successText;
-                  actionLabel = 'Approve';
-                } else {
-                  actionBg = colors.buttonDanger;
-                  actionLabel = 'Reject';
-                }
-                return (
-                  <button
-                    onClick={handleApproveReject}
-                    disabled={acting}
-                    style={{
-                      padding: '0.5rem 1rem',
-                      background: actionBg,
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: 4,
-                      cursor: acting ? 'default' : 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {actionLabel}
-                  </button>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
+        <AdminApproveRejectDialog
+          pendingAction={pendingAction}
+          noteInput={noteInput}
+          setNoteInput={setNoteInput}
+          acting={acting}
+          colors={colors}
+          onCancel={() => setPendingAction(null)}
+          onConfirm={handleApproveReject}
+        />
       )}
 
       {/* Confirm deactivate */}

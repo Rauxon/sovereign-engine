@@ -1,3 +1,4 @@
+import { useRef, useEffect } from 'react';
 import { useTheme } from '../../theme';
 
 type ConfirmDialogProps = Readonly<{
@@ -18,39 +19,36 @@ export default function ConfirmDialog({
   destructive = false,
 }: ConfirmDialogProps) {
   const { colors } = useTheme();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  const handleClose = () => {
+    onCancel();
+  };
 
   return (
-    <button
-      type="button"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100vw',
-        height: '100vh',
-        background: colors.overlayBg,
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000,
-        border: 'none',
-        padding: 0,
-        cursor: 'default',
-      }}
-      onClick={onCancel}
-    >
-      <div
-        role="dialog"
-        aria-label={title}
+    <>
+      <style>{`.confirm-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="confirm-dialog"
         style={{
-          background: colors.dialogBg,
+          border: 'none',
           borderRadius: 8,
           padding: '1.5rem',
           maxWidth: 420,
           width: '90%',
           boxShadow: colors.dialogShadow,
+          background: colors.dialogBg,
+          color: 'inherit',
         }}
-        onClick={(e) => e.stopPropagation()}
+        onClose={handleClose}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
       >
         <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>{title}</h3>
         <p style={{ margin: 0, color: colors.textMuted, lineHeight: 1.5 }}>{message}</p>
@@ -82,7 +80,7 @@ export default function ConfirmDialog({
             {confirmLabel}
           </button>
         </div>
-      </div>
-    </button>
+      </dialog>
+    </>
   );
 }
