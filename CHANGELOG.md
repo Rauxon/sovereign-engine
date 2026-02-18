@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-02-18
+
+### Changed
+- Converted all modal dialogs to native `<dialog>` element with `showModal()` for proper focus trapping, Escape key handling, and accessibility semantics
+- Reduced Rust cognitive complexity: decomposed `download_single_file()` by extracting `hf_http_error_hint()` and `stream_response_to_file()` helpers
+- Extracted shared `try_bootstrap_auth()` helper to eliminate duplicated Basic auth logic
+- Replaced deprecated React 19 `FormEvent` usage with `SubmitEvent`
+- Improved accessibility: proper label associations, keyboard support on interactive calendar elements, semantic HTML throughout
+- Flattened deeply nested control flow in `fetch_tokenizer_config()` and `run_download()`
+- Extracted `parse_drm_fdinfo_vram()` as a pure testable function
+
+### Fixed
+- Resolved 147 SonarQube code quality issues (code smells and bugs) across React UI and Rust proxy
+- Fixed nested ternary expressions across multiple components
+- Fixed missing `key` props using semantic identifiers instead of array indices
+- Fixed non-interactive elements incorrectly receiving event handlers
+
 ## [1.0.0] - 2026-02-18
 
 ### Added
