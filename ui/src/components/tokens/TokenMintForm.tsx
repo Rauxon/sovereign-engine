@@ -13,7 +13,7 @@ interface TokenMintFormProps {
   idPrefix?: string;
 }
 
-export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: TokenMintFormProps) {
+export default function TokenMintForm({ onMinted, idPrefix = 'mint' }: Readonly<TokenMintFormProps>) {
   const { colors } = useTheme();
   const form = formStyles(colors);
 
