@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-02-18
+
+### Added
+- Comprehensive unit test suite: 92 Rust tests across 11 modules, 20 React tests
+- Test coverage for security-critical paths: token hashing, encryption roundtrips, credential validation, CSP hash extraction
+- Vitest + Testing Library setup for React UI
+
+### Changed
+- Reduced code duplication from 10.5% to 6.6%: extracted shared table/form styles, `TokenMintForm` component, and `proxy/src/api/common.rs` shared handlers
+- Extracted `start_container_core()` and `post_stop_cleanup()` shared helpers to consolidate container lifecycle logic
+
 ## [1.0.1] - 2026-02-18
 
 ### Changed
