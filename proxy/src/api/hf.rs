@@ -635,148 +635,171 @@ async fn download_files_to_disk(
     let mut total_downloaded: u64 = 0;
 
     for file in downloadable {
-        // Check for cancellation
+        // Check for cancellation between files
+        if is_download_cancelled(downloads, download_id).await {
+            info!(download_id = %download_id, "Download was cancelled, stopping");
+            return Err(());
+        }
+
+        download_single_file(
+            client,
+            downloads,
+            download_id,
+            file,
+            dest_dir,
+            hf_token,
+            hf_repo,
+            &mut total_downloaded,
+        )
+        .await?;
+    }
+
+    Ok(total_downloaded)
+}
+
+/// Check whether a download has been cancelled.
+async fn is_download_cancelled(downloads: &Downloads, download_id: &str) -> bool {
+    let dls = downloads.read().await;
+    dls.get(download_id)
+        .is_some_and(|dl| dl.status == DownloadStatus::Cancelled)
+}
+
+/// Download a single file from HuggingFace to disk with progress tracking.
+/// Updates `total_downloaded` as bytes are written.
+async fn download_single_file(
+    client: &reqwest::Client,
+    downloads: &Downloads,
+    download_id: &str,
+    file: &HfFileEntry,
+    dest_dir: &str,
+    hf_token: &Option<String>,
+    hf_repo: &str,
+    total_downloaded: &mut u64,
+) -> Result<(), ()> {
+    // Reject path components that could escape the destination directory
+    if file.path.contains("..") || file.path.starts_with('/') {
+        set_download_error(
+            downloads,
+            download_id,
+            &format!("Refusing file with unsafe path: {}", file.path),
+        )
+        .await;
+        return Err(());
+    }
+
+    let file_url = format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        hf_repo, file.path
+    );
+    let file_dest = format!("{}/{}", dest_dir, file.path);
+
+    // Create parent directory for nested files
+    if let Some(parent) = std::path::Path::new(&file_dest).parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            set_download_error(
+                downloads,
+                download_id,
+                &format!("Failed to create directory for {}: {e}", file.path),
+            )
+            .await;
+            return Err(());
+        }
+    }
+
+    info!(file = %file.path, url = %file_url, "Downloading file");
+
+    let resp = match client.get(&file_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            set_download_error(
+                downloads,
+                download_id,
+                &format!("Failed to download {}: {e}", file.path),
+            )
+            .await;
+            return Err(());
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let hint = if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
         {
-            let dls = downloads.read().await;
-            if let Some(dl) = dls.get(download_id) {
-                if dl.status == DownloadStatus::Cancelled {
-                    info!(download_id = %download_id, "Download was cancelled, stopping");
-                    return Err(());
-                }
-            }
-        }
-
-        // Reject path components that could escape the destination directory
-        if file.path.contains("..") || file.path.starts_with('/') {
-            set_download_error(
-                downloads,
-                download_id,
-                &format!("Refusing file with unsafe path: {}", file.path),
-            )
-            .await;
-            return Err(());
-        }
-
-        let file_url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            hf_repo, file.path
-        );
-        let file_dest = format!("{}/{}", dest_dir, file.path);
-
-        // Create parent directory for nested files
-        if let Some(parent) = std::path::Path::new(&file_dest).parent() {
-            if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                set_download_error(
-                    downloads,
-                    download_id,
-                    &format!("Failed to create directory for {}: {e}", file.path),
-                )
-                .await;
-                return Err(());
-            }
-        }
-
-        info!(file = %file.path, url = %file_url, "Downloading file");
-
-        let resp = match client.get(&file_url).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                set_download_error(
-                    downloads,
-                    download_id,
-                    &format!("Failed to download {}: {e}", file.path),
-                )
-                .await;
-                return Err(());
-            }
-        };
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let hint = if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                if hf_token.is_some() {
-                    " — HF_TOKEN may lack access to this gated model"
-                } else {
-                    " — this may be a gated model; set HF_TOKEN env var to authenticate"
-                }
+            if hf_token.is_some() {
+                " — HF_TOKEN may lack access to this gated model"
             } else {
-                ""
-            };
+                " — this may be a gated model; set HF_TOKEN env var to authenticate"
+            }
+        } else {
+            ""
+        };
+        set_download_error(
+            downloads,
+            download_id,
+            &format!("Download of {} returned HTTP {status}{hint}", file.path),
+        )
+        .await;
+        return Err(());
+    }
+
+    // Stream file to disk with progress tracking
+    let mut out_file = match tokio::fs::File::create(&file_dest).await {
+        Ok(f) => f,
+        Err(e) => {
             set_download_error(
                 downloads,
                 download_id,
-                &format!("Download of {} returned HTTP {status}{hint}", file.path),
+                &format!("Failed to create file {}: {e}", file_dest),
             )
             .await;
             return Err(());
         }
+    };
 
-        // Stream file to disk with progress tracking
-        let mut out_file = match tokio::fs::File::create(&file_dest).await {
-            Ok(f) => f,
-            Err(e) => {
-                set_download_error(
-                    downloads,
-                    download_id,
-                    &format!("Failed to create file {}: {e}", file_dest),
-                )
-                .await;
-                return Err(());
-            }
-        };
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        // Check for cancellation periodically
+        if is_download_cancelled(downloads, download_id).await {
+            info!(download_id = %download_id, "Download cancelled during transfer");
+            let _ = tokio::fs::remove_file(&file_dest).await;
+            return Err(());
+        }
 
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk_result) = stream.next().await {
-            // Check for cancellation periodically
-            {
-                let dls = downloads.read().await;
-                if let Some(dl) = dls.get(download_id) {
-                    if dl.status == DownloadStatus::Cancelled {
-                        info!(download_id = %download_id, "Download cancelled during transfer");
-                        // Clean up partial file
-                        let _ = tokio::fs::remove_file(&file_dest).await;
-                        return Err(());
-                    }
-                }
-            }
-
-            match chunk_result {
-                Ok(chunk) => {
-                    use tokio::io::AsyncWriteExt;
-                    if let Err(e) = out_file.write_all(&chunk).await {
-                        set_download_error(
-                            downloads,
-                            download_id,
-                            &format!("Write error for {}: {e}", file.path),
-                        )
-                        .await;
-                        return Err(());
-                    }
-
-                    total_downloaded += chunk.len() as u64;
-
-                    // Update progress
-                    let mut dls = downloads.write().await;
-                    if let Some(dl) = dls.get_mut(download_id) {
-                        dl.progress_bytes = total_downloaded;
-                    }
-                }
-                Err(e) => {
+        match chunk_result {
+            Ok(chunk) => {
+                use tokio::io::AsyncWriteExt;
+                if let Err(e) = out_file.write_all(&chunk).await {
                     set_download_error(
                         downloads,
                         download_id,
-                        &format!("Stream error for {}: {e}", file.path),
+                        &format!("Write error for {}: {e}", file.path),
                     )
                     .await;
                     return Err(());
                 }
+
+                *total_downloaded += chunk.len() as u64;
+
+                // Update progress
+                let mut dls = downloads.write().await;
+                if let Some(dl) = dls.get_mut(download_id) {
+                    dl.progress_bytes = *total_downloaded;
+                }
+            }
+            Err(e) => {
+                set_download_error(
+                    downloads,
+                    download_id,
+                    &format!("Stream error for {}: {e}", file.path),
+                )
+                .await;
+                return Err(());
             }
         }
     }
 
-    Ok(total_downloaded)
+    Ok(())
 }
 
 /// Detect the primary model file from a list of downloaded files.
