@@ -6,7 +6,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::Engine as _;
 use openidconnect::core::{
     CoreClient, CoreIdToken, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata,
     CoreResponseType, CoreTokenResponse,
@@ -327,60 +326,43 @@ async fn callback(
 /// Accepts either a session cookie or Basic auth (bootstrap credentials).
 async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
     // Try bootstrap Basic auth first
-    if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(basic) = auth_header.strip_prefix("Basic ") {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(basic) {
-                if let Ok(creds) = String::from_utf8(decoded) {
-                    if let Some((user, pass)) = creds.split_once(':') {
-                        if let Ok(user_id) = super::bootstrap::validate_bootstrap(
-                            &state.config,
-                            &state.db,
-                            user,
-                            pass,
-                        )
-                        .await
-                        {
-                            // Create a session so subsequent requests work via cookie
-                            let session_token = match sessions::create_session(&state.db, &user_id)
-                                .await
-                            {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    error!(error = %e, "Failed to create session for bootstrap user");
-                                    return (
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                        Json(serde_json::json!({ "error": "Failed to create session" })),
-                                    ).into_response();
-                                }
-                            };
-
-                            let cookie = sessions::build_cookie(
-                                &session_token,
-                                86400,
-                                state.config.secure_cookies,
-                            );
-
-                            return (
-                                [("set-cookie", cookie)],
-                                Json(serde_json::json!({
-                                    "user_id": user_id,
-                                    "email": null,
-                                    "display_name": user,
-                                    "is_admin": true,
-                                })),
-                            )
-                                .into_response();
-                        }
-                    }
-                }
+    if let Some(auth) = super::try_bootstrap_auth(&headers, &state.config, &state.db).await {
+        // Create a session so subsequent requests work via cookie
+        let session_token = match sessions::create_session(&state.db, &auth.user_id).await {
+            Ok(t) => t,
+            Err(e) => {
+                error!(error = %e, "Failed to create session for bootstrap user");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Failed to create session" })),
+                )
+                    .into_response();
             }
-            // Basic auth was provided but invalid
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid credentials" })),
-            )
-                .into_response();
-        }
+        };
+
+        let cookie = sessions::build_cookie(&session_token, 86400, state.config.secure_cookies);
+
+        return (
+            [("set-cookie", cookie)],
+            Json(serde_json::json!({
+                "user_id": auth.user_id,
+                "email": auth.email,
+                "display_name": auth.display_name,
+                "is_admin": auth.is_admin,
+            })),
+        )
+            .into_response();
+    } else if headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|h| h.starts_with("Basic "))
+    {
+        // Basic auth was provided but invalid
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "Invalid credentials" })),
+        )
+            .into_response();
     }
 
     // Fall back to session cookie

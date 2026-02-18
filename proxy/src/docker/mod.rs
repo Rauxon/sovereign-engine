@@ -452,7 +452,7 @@ impl DockerManager {
     }
 
     /// Read DRM fdinfo for a set of PIDs to extract AMD VRAM usage.
-    /// Returns PID → VRAM bytes. Deduplicates by drm-client-id.
+    /// Returns PID -> VRAM bytes. Deduplicates by drm-client-id.
     fn drm_fdinfo_vram(pids: &HashSet<u32>) -> HashMap<u32, u64> {
         let mut result = HashMap::new();
 
@@ -472,41 +472,14 @@ impl DockerManager {
                     Err(_) => continue,
                 };
 
-                // Only process DRM fdinfo entries
-                if !content.contains("drm-memory-vram") {
-                    continue;
-                }
-
-                // Extract drm-client-id for dedup
-                let client_id = content
-                    .lines()
-                    .find(|l| l.starts_with("drm-client-id:"))
-                    .map(|l| l.trim().to_string());
-
-                if let Some(ref cid) = client_id {
-                    if !seen_clients.insert(cid.clone()) {
-                        continue; // Already counted this client
-                    }
-                }
-
-                // Parse "drm-memory-vram:\t1234 KiB" or similar
-                for line in content.lines() {
-                    if let Some(rest) = line.strip_prefix("drm-memory-vram:") {
-                        let rest = rest.trim();
-                        // Format: "<value> <unit>" e.g. "1234 KiB"
-                        let parts: Vec<&str> = rest.split_whitespace().collect();
-                        if let Some(Ok(val)) = parts.first().map(|s| s.parse::<u64>()) {
-                            let unit = parts.get(1).copied().unwrap_or("KiB");
-                            let bytes = match unit {
-                                "B" => val,
-                                "KiB" => val * 1024,
-                                "MiB" => val * 1024 * 1024,
-                                "GiB" => val * 1024 * 1024 * 1024,
-                                _ => val * 1024, // default to KiB
-                            };
-                            pid_vram += bytes;
+                if let Some((client_id, vram_bytes)) = parse_drm_fdinfo(&content) {
+                    // Deduplicate by client_id when present
+                    if let Some(cid) = client_id {
+                        if !seen_clients.insert(cid) {
+                            continue; // Already counted this client
                         }
                     }
+                    pid_vram += vram_bytes;
                 }
             }
 
@@ -516,6 +489,46 @@ impl DockerManager {
         }
 
         result
+    }
+}
+
+/// Parse a single fdinfo entry for DRM VRAM usage.
+/// Returns `(client_id, vram_bytes)` if the entry contains DRM memory info.
+/// `client_id` is `None` when the entry has no `drm-client-id:` line; the caller
+/// should skip dedup for those entries.
+fn parse_drm_fdinfo(content: &str) -> Option<(Option<String>, u64)> {
+    if !content.contains("drm-memory-vram") {
+        return None;
+    }
+
+    let client_id = content
+        .lines()
+        .find(|l| l.starts_with("drm-client-id:"))
+        .map(|l| l.trim().to_string());
+
+    let mut vram_bytes: u64 = 0;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("drm-memory-vram:") {
+            let rest = rest.trim();
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            if let Some(Ok(val)) = parts.first().map(|s| s.parse::<u64>()) {
+                let unit = parts.get(1).copied().unwrap_or("KiB");
+                let bytes = match unit {
+                    "B" => val,
+                    "KiB" => val * 1024,
+                    "MiB" => val * 1024 * 1024,
+                    "GiB" => val * 1024 * 1024 * 1024,
+                    _ => val * 1024, // default to KiB
+                };
+                vram_bytes += bytes;
+            }
+        }
+    }
+
+    if vram_bytes > 0 {
+        Some((client_id, vram_bytes))
+    } else {
+        None
     }
 }
 

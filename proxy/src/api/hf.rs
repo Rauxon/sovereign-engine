@@ -472,22 +472,11 @@ async fn cancel_download(
 }
 
 // ---------------------------------------------------------------------------
-// Background download task
+// Background download task — helper functions
 // ---------------------------------------------------------------------------
 
-async fn run_download(
-    app_state: Arc<AppState>,
-    downloads: Downloads,
-    download_id: String,
-    hf_repo: String,
-    file_filter: Option<Vec<String>>,
-    category_id: Option<String>,
-    backend_type: Option<String>,
-) {
-    info!(hf_repo = %hf_repo, download_id = %download_id, "Starting model download");
-
-    let hf_token = std::env::var("HF_TOKEN").ok();
-
+/// Build an HTTP client with optional HuggingFace token authentication.
+fn build_hf_client(hf_token: &Option<String>) -> Result<reqwest::Client, String> {
     let mut client_builder = reqwest::Client::builder().user_agent("sovereign-engine/0.1");
 
     if let Some(ref token) = hf_token {
@@ -498,58 +487,38 @@ async fn run_download(
         client_builder = client_builder.default_headers(headers);
     }
 
-    let client = match client_builder.build() {
-        Ok(c) => c,
-        Err(e) => {
-            set_download_error(&downloads, &download_id, &format!("HTTP client error: {e}")).await;
-            return;
-        }
-    };
+    client_builder
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
 
-    // Step 1: List files in the repo
+/// Fetch the file tree from a HuggingFace repo and filter to downloadable files.
+async fn list_downloadable_files(
+    client: &reqwest::Client,
+    hf_repo: &str,
+    file_filter: &Option<Vec<String>>,
+) -> Result<Vec<HfFileEntry>, String> {
     let tree_url = format!("https://huggingface.co/api/models/{}/tree/main", hf_repo);
-    let tree_resp = match client.get(&tree_url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            set_download_error(
-                &downloads,
-                &download_id,
-                &format!("Failed to list repo files: {e}"),
-            )
-            .await;
-            return;
-        }
-    };
+    let tree_resp = client
+        .get(&tree_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to list repo files: {e}"))?;
 
     if !tree_resp.status().is_success() {
         let status = tree_resp.status();
         let body = tree_resp.text().await.unwrap_or_default();
-        set_download_error(
-            &downloads,
-            &download_id,
-            &format!("HuggingFace tree API returned {status}: {body}"),
-        )
-        .await;
-        return;
+        return Err(format!("HuggingFace tree API returned {status}: {body}"));
     }
 
-    let files: Vec<HfFileEntry> = match tree_resp.json().await {
-        Ok(f) => f,
-        Err(e) => {
-            set_download_error(
-                &downloads,
-                &download_id,
-                &format!("Failed to parse file listing: {e}"),
-            )
-            .await;
-            return;
-        }
-    };
+    let files: Vec<HfFileEntry> = tree_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse file listing: {e}"))?;
 
-    // Filter to downloadable files (skip directories and git metadata)
     let skip_files = [".gitattributes", ".gitignore", ".git"];
-    let downloadable: Vec<&HfFileEntry> = files
-        .iter()
+    let downloadable: Vec<HfFileEntry> = files
+        .into_iter()
         .filter(|f| {
             if f.file_type != "file" {
                 return false;
@@ -557,7 +526,6 @@ async fn run_download(
             if skip_files.iter().any(|s| f.path.starts_with(s)) {
                 return false;
             }
-            // If specific files were requested, only include those
             if let Some(ref filter) = file_filter {
                 return filter.iter().any(|p| p == &f.path);
             }
@@ -566,103 +534,114 @@ async fn run_download(
         .collect();
 
     if downloadable.is_empty() {
-        set_download_error(&downloads, &download_id, "No files found in repository").await;
-        return;
+        return Err("No files found in repository".to_string());
     }
 
-    // Calculate total size
-    let total_bytes: u64 = downloadable.iter().map(|f| f.size.unwrap_or(0)).sum();
+    Ok(downloadable)
+}
 
-    {
-        let mut dls = downloads.write().await;
-        if let Some(dl) = dls.get_mut(&download_id) {
-            dl.total_bytes = total_bytes;
-        }
-    }
+/// Validate that the download (plus other in-flight downloads) will fit on disk.
+/// Returns Err(()) if disk space is insufficient (error is reported via set_download_error).
+async fn validate_disk_space(
+    app_state: &AppState,
+    downloads: &Downloads,
+    download_id: &str,
+    total_bytes: u64,
+) -> Result<(), ()> {
+    let disk = match get_disk_usage(&app_state.config.model_path) {
+        Ok(d) => d,
+        Err(_) => return Ok(()), // Can't check — don't block
+    };
 
-    // Check that this download (plus other in-flight downloads) will fit on disk
-    if let Ok(disk) = get_disk_usage(&app_state.config.model_path) {
-        // Sum remaining bytes for all other active downloads
-        let other_inflight: u64 = {
-            let dls = downloads.read().await;
-            dls.values()
-                .filter(|dl| dl.id != download_id && dl.status == DownloadStatus::Downloading)
-                .map(|dl| dl.total_bytes.saturating_sub(dl.progress_bytes))
-                .sum()
-        };
+    let other_inflight: u64 = {
+        let dls = downloads.read().await;
+        dls.values()
+            .filter(|dl| dl.id != download_id && dl.status == DownloadStatus::Downloading)
+            .map(|dl| dl.total_bytes.saturating_sub(dl.progress_bytes))
+            .sum()
+    };
 
-        let required = total_bytes + other_inflight;
-        let projected_used = disk.used_bytes + required;
-        let projected_pct = if disk.total_bytes > 0 {
-            (projected_used as f64 / disk.total_bytes as f64) * 100.0
-        } else {
-            0.0
-        };
+    let required = total_bytes + other_inflight;
+    let projected_used = disk.used_bytes + required;
+    let projected_pct = if disk.total_bytes > 0 {
+        (projected_used as f64 / disk.total_bytes as f64) * 100.0
+    } else {
+        0.0
+    };
 
-        if required > disk.free_bytes {
-            set_download_error(
-                &downloads,
-                &download_id,
-                &format!(
-                    "Not enough disk space: need {} but only {} free",
-                    format_bytes(required),
-                    format_bytes(disk.free_bytes),
-                ),
-            )
-            .await;
-            return;
-        }
-
-        if projected_pct >= 95.0 {
-            set_download_error(
-                &downloads,
-                &download_id,
-                &format!(
-                    "Download would push disk to {:.1}% (threshold 95%): need {}, {} free",
-                    projected_pct,
-                    format_bytes(required),
-                    format_bytes(disk.free_bytes),
-                ),
-            )
-            .await;
-            return;
-        }
-
-        if projected_pct >= 90.0 {
-            warn!(
-                projected_pct = format!("{:.1}%", projected_pct),
-                download_bytes = total_bytes,
-                "Download will push disk above 90% warning threshold"
-            );
-        }
-    }
-
-    // Create destination directory: MODEL_PATH/<repo_name>
-    // Replace '/' in repo name with '--' for filesystem safety
-    let safe_repo = hf_repo.replace('/', "--");
-    let dest_dir = format!("{}/{}", app_state.config.model_path, safe_repo);
-
-    if let Err(e) = tokio::fs::create_dir_all(&dest_dir).await {
+    if required > disk.free_bytes {
         set_download_error(
-            &downloads,
-            &download_id,
+            downloads,
+            download_id,
+            &format!(
+                "Not enough disk space: need {} but only {} free",
+                format_bytes(required),
+                format_bytes(disk.free_bytes),
+            ),
+        )
+        .await;
+        return Err(());
+    }
+
+    if projected_pct >= 95.0 {
+        set_download_error(
+            downloads,
+            download_id,
+            &format!(
+                "Download would push disk to {:.1}% (threshold 95%): need {}, {} free",
+                projected_pct,
+                format_bytes(required),
+                format_bytes(disk.free_bytes),
+            ),
+        )
+        .await;
+        return Err(());
+    }
+
+    if projected_pct >= 90.0 {
+        warn!(
+            projected_pct = format!("{:.1}%", projected_pct),
+            download_bytes = total_bytes,
+            "Download will push disk above 90% warning threshold"
+        );
+    }
+
+    Ok(())
+}
+
+/// Download all files to disk with progress tracking and cancellation support.
+/// Creates the destination directory and streams each file.
+/// Returns the total bytes downloaded on success, or Err(()) if the download
+/// was cancelled or an error occurred (reported via set_download_error).
+async fn download_files_to_disk(
+    client: &reqwest::Client,
+    downloads: &Downloads,
+    download_id: &str,
+    downloadable: &[HfFileEntry],
+    dest_dir: &str,
+    hf_token: &Option<String>,
+    hf_repo: &str,
+) -> Result<u64, ()> {
+    if let Err(e) = tokio::fs::create_dir_all(dest_dir).await {
+        set_download_error(
+            downloads,
+            download_id,
             &format!("Failed to create directory {dest_dir}: {e}"),
         )
         .await;
-        return;
+        return Err(());
     }
 
-    // Step 2: Download each file
     let mut total_downloaded: u64 = 0;
 
-    for file in &downloadable {
+    for file in downloadable {
         // Check for cancellation
         {
             let dls = downloads.read().await;
-            if let Some(dl) = dls.get(&download_id) {
+            if let Some(dl) = dls.get(download_id) {
                 if dl.status == DownloadStatus::Cancelled {
                     info!(download_id = %download_id, "Download was cancelled, stopping");
-                    return;
+                    return Err(());
                 }
             }
         }
@@ -670,12 +649,12 @@ async fn run_download(
         // Reject path components that could escape the destination directory
         if file.path.contains("..") || file.path.starts_with('/') {
             set_download_error(
-                &downloads,
-                &download_id,
+                downloads,
+                download_id,
                 &format!("Refusing file with unsafe path: {}", file.path),
             )
             .await;
-            return;
+            return Err(());
         }
 
         let file_url = format!(
@@ -688,12 +667,12 @@ async fn run_download(
         if let Some(parent) = std::path::Path::new(&file_dest).parent() {
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 set_download_error(
-                    &downloads,
-                    &download_id,
+                    downloads,
+                    download_id,
                     &format!("Failed to create directory for {}: {e}", file.path),
                 )
                 .await;
-                return;
+                return Err(());
             }
         }
 
@@ -703,12 +682,12 @@ async fn run_download(
             Ok(r) => r,
             Err(e) => {
                 set_download_error(
-                    &downloads,
-                    &download_id,
+                    downloads,
+                    download_id,
                     &format!("Failed to download {}: {e}", file.path),
                 )
                 .await;
-                return;
+                return Err(());
             }
         };
 
@@ -726,12 +705,12 @@ async fn run_download(
                 ""
             };
             set_download_error(
-                &downloads,
-                &download_id,
+                downloads,
+                download_id,
                 &format!("Download of {} returned HTTP {status}{hint}", file.path),
             )
             .await;
-            return;
+            return Err(());
         }
 
         // Stream file to disk with progress tracking
@@ -739,12 +718,12 @@ async fn run_download(
             Ok(f) => f,
             Err(e) => {
                 set_download_error(
-                    &downloads,
-                    &download_id,
+                    downloads,
+                    download_id,
                     &format!("Failed to create file {}: {e}", file_dest),
                 )
                 .await;
-                return;
+                return Err(());
             }
         };
 
@@ -753,12 +732,12 @@ async fn run_download(
             // Check for cancellation periodically
             {
                 let dls = downloads.read().await;
-                if let Some(dl) = dls.get(&download_id) {
+                if let Some(dl) = dls.get(download_id) {
                     if dl.status == DownloadStatus::Cancelled {
                         info!(download_id = %download_id, "Download cancelled during transfer");
                         // Clean up partial file
                         let _ = tokio::fs::remove_file(&file_dest).await;
-                        return;
+                        return Err(());
                     }
                 }
             }
@@ -768,39 +747,133 @@ async fn run_download(
                     use tokio::io::AsyncWriteExt;
                     if let Err(e) = out_file.write_all(&chunk).await {
                         set_download_error(
-                            &downloads,
-                            &download_id,
+                            downloads,
+                            download_id,
                             &format!("Write error for {}: {e}", file.path),
                         )
                         .await;
-                        return;
+                        return Err(());
                     }
 
                     total_downloaded += chunk.len() as u64;
 
                     // Update progress
                     let mut dls = downloads.write().await;
-                    if let Some(dl) = dls.get_mut(&download_id) {
+                    if let Some(dl) = dls.get_mut(download_id) {
                         dl.progress_bytes = total_downloaded;
                     }
                 }
                 Err(e) => {
                     set_download_error(
-                        &downloads,
-                        &download_id,
+                        downloads,
+                        download_id,
                         &format!("Stream error for {}: {e}", file.path),
                     )
                     .await;
-                    return;
+                    return Err(());
                 }
             }
         }
     }
 
-    // Step 3: Capture tokenizer metadata for future use (chat template detection, etc.)
+    Ok(total_downloaded)
+}
+
+/// Detect the primary model file from a list of downloaded files.
+/// Prefers the largest .gguf file, then the largest .safetensors file.
+fn detect_primary_file(downloadable: &[HfFileEntry]) -> Option<String> {
+    let mut best_gguf: Option<(&str, u64)> = None;
+    let mut best_safetensors: Option<(&str, u64)> = None;
+    for file in downloadable {
+        let sz = file.size.unwrap_or(0);
+        if file.path.ends_with(".gguf") && best_gguf.is_none_or(|(_, prev)| sz > prev) {
+            best_gguf = Some((&file.path, sz));
+        } else if file.path.ends_with(".safetensors")
+            && best_safetensors.is_none_or(|(_, prev)| sz > prev)
+        {
+            best_safetensors = Some((&file.path, sz));
+        }
+    }
+    best_gguf
+        .or(best_safetensors)
+        .map(|(path, _)| path.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Background download task — orchestrator
+// ---------------------------------------------------------------------------
+
+async fn run_download(
+    app_state: Arc<AppState>,
+    downloads: Downloads,
+    download_id: String,
+    hf_repo: String,
+    file_filter: Option<Vec<String>>,
+    category_id: Option<String>,
+    backend_type: Option<String>,
+) {
+    info!(hf_repo = %hf_repo, download_id = %download_id, "Starting model download");
+
+    let hf_token = std::env::var("HF_TOKEN").ok();
+
+    // Step 1: Build HTTP client with optional auth
+    let client = match build_hf_client(&hf_token) {
+        Ok(c) => c,
+        Err(e) => {
+            set_download_error(&downloads, &download_id, &e).await;
+            return;
+        }
+    };
+
+    // Step 2-3: List and filter downloadable files
+    let downloadable = match list_downloadable_files(&client, &hf_repo, &file_filter).await {
+        Ok(files) => files,
+        Err(e) => {
+            set_download_error(&downloads, &download_id, &e).await;
+            return;
+        }
+    };
+
+    // Step 4: Calculate total size and update download state
+    let total_bytes: u64 = downloadable.iter().map(|f| f.size.unwrap_or(0)).sum();
+    {
+        let mut dls = downloads.write().await;
+        if let Some(dl) = dls.get_mut(&download_id) {
+            dl.total_bytes = total_bytes;
+        }
+    }
+
+    // Step 5: Check disk space (including other in-flight downloads)
+    if validate_disk_space(&app_state, &downloads, &download_id, total_bytes)
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Step 6-7: Create destination directory and download files
+    let safe_repo = hf_repo.replace('/', "--");
+    let dest_dir = format!("{}/{}", app_state.config.model_path, safe_repo);
+
+    let total_downloaded = match download_files_to_disk(
+        &client,
+        &downloads,
+        &download_id,
+        &downloadable,
+        &dest_dir,
+        &hf_token,
+        &hf_repo,
+    )
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(()) => return,
+    };
+
+    // Step 8: Capture tokenizer metadata for future use (chat template detection, etc.)
     let model_metadata = fetch_tokenizer_config(&dest_dir, &hf_repo, &client).await;
 
-    // Step 3b: Extract architecture metadata from GGUF file
+    // Step 9: Extract architecture metadata from GGUF file
     let gguf_meta = {
         let mut meta: Option<GgufMetadata> = None;
         for file in &downloadable {
@@ -829,29 +902,12 @@ async fn run_download(
         meta.unwrap_or_default()
     };
 
-    // Step 4: Register model in DB on completion
+    // Step 10: Detect the primary model file
+    let primary_filename = detect_primary_file(&downloadable);
+
+    // Step 11: Register model in DB
     let model_id = Uuid::new_v4().to_string();
     let size_bytes = total_downloaded as i64;
-
-    // Detect the primary model file: prefer the largest .gguf, then .safetensors, then any file
-    let primary_filename = {
-        let mut best_gguf: Option<(&str, u64)> = None;
-        let mut best_safetensors: Option<(&str, u64)> = None;
-        for file in &downloadable {
-            let sz = file.size.unwrap_or(0);
-            if file.path.ends_with(".gguf") && best_gguf.is_none_or(|(_, prev)| sz > prev) {
-                best_gguf = Some((&file.path, sz));
-            } else if file.path.ends_with(".safetensors")
-                && best_safetensors.is_none_or(|(_, prev)| sz > prev)
-            {
-                best_safetensors = Some((&file.path, sz));
-            }
-        }
-        best_gguf
-            .or(best_safetensors)
-            .map(|(path, _)| path.to_string())
-    };
-
     let bt = backend_type.as_deref().unwrap_or("llamacpp");
     match sqlx::query(
         "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -891,7 +947,7 @@ async fn run_download(
         }
     }
 
-    // Mark as complete
+    // Step 12: Mark download as complete
     let mut dls = downloads.write().await;
     if let Some(dl) = dls.get_mut(&download_id) {
         dl.status = DownloadStatus::Complete;
@@ -902,6 +958,57 @@ async fn run_download(
 // ---------------------------------------------------------------------------
 // Tokenizer metadata capture
 // ---------------------------------------------------------------------------
+
+/// Read tokenizer_config.json from a local directory, validating it as JSON.
+async fn try_local_tokenizer(dest_dir: &str) -> Option<String> {
+    let local_path = format!("{}/tokenizer_config.json", dest_dir);
+    let contents = tokio::fs::read_to_string(&local_path).await.ok()?;
+    serde_json::from_str::<serde_json::Value>(&contents).ok()?;
+    Some(contents)
+}
+
+/// Fetch tokenizer_config.json from a remote URL, validating it as JSON.
+async fn try_remote_tokenizer(client: &reqwest::Client, url: &str) -> Option<String> {
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().await.ok()?;
+    serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    Some(text)
+}
+
+/// Look up the base_model for an HF repo via the API, then fetch its tokenizer.
+async fn try_base_model_tokenizer(
+    client: &reqwest::Client,
+    hf_repo: &str,
+) -> Option<(String, String)> {
+    let api_url = format!("https://huggingface.co/api/models/{}", hf_repo);
+    let resp = client.get(&api_url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let model_info = resp.json::<serde_json::Value>().await.ok()?;
+
+    // cardData.base_model can be a string or array of strings
+    let base_model = model_info
+        .get("cardData")
+        .and_then(|cd| cd.get("base_model"))
+        .and_then(|bm| {
+            bm.as_str().map(String::from).or_else(|| {
+                bm.as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str().map(String::from))
+            })
+        })?;
+
+    let base_url = format!(
+        "https://huggingface.co/{}/raw/main/tokenizer_config.json",
+        base_model
+    );
+    let text = try_remote_tokenizer(client, &base_url).await?;
+    Some((base_model, text))
+}
 
 /// Attempt to fetch tokenizer_config.json for a downloaded model.
 ///
@@ -917,13 +1024,9 @@ async fn fetch_tokenizer_config(
     client: &reqwest::Client,
 ) -> Option<String> {
     // 1. Try local file (may already be in the download)
-    let local_path = format!("{}/tokenizer_config.json", dest_dir);
-    if let Ok(contents) = tokio::fs::read_to_string(&local_path).await {
-        // Validate it's actually JSON
-        if serde_json::from_str::<serde_json::Value>(&contents).is_ok() {
-            info!(hf_repo = %hf_repo, source = "local", "Captured tokenizer_config.json");
-            return Some(contents);
-        }
+    if let Some(contents) = try_local_tokenizer(dest_dir).await {
+        info!(hf_repo = %hf_repo, source = "local", "Captured tokenizer_config.json");
+        return Some(contents);
     }
 
     // 2. Fetch directly from the repo
@@ -931,57 +1034,20 @@ async fn fetch_tokenizer_config(
         "https://huggingface.co/{}/raw/main/tokenizer_config.json",
         hf_repo
     );
-    if let Ok(resp) = client.get(&url).send().await {
-        if resp.status().is_success() {
-            if let Ok(text) = resp.text().await {
-                if serde_json::from_str::<serde_json::Value>(&text).is_ok() {
-                    info!(hf_repo = %hf_repo, source = "repo", "Captured tokenizer_config.json");
-                    return Some(text);
-                }
-            }
-        }
+    if let Some(text) = try_remote_tokenizer(client, &url).await {
+        info!(hf_repo = %hf_repo, source = "repo", "Captured tokenizer_config.json");
+        return Some(text);
     }
 
     // 3. Try to find base_model via HF API and fetch from there
-    let api_url = format!("https://huggingface.co/api/models/{}", hf_repo);
-    if let Ok(resp) = client.get(&api_url).send().await {
-        if resp.status().is_success() {
-            if let Ok(model_info) = resp.json::<serde_json::Value>().await {
-                // cardData.base_model can be a string or array of strings
-                let base_model = model_info
-                    .get("cardData")
-                    .and_then(|cd| cd.get("base_model"))
-                    .and_then(|bm| {
-                        bm.as_str().map(String::from).or_else(|| {
-                            bm.as_array()
-                                .and_then(|a| a.first())
-                                .and_then(|v| v.as_str().map(String::from))
-                        })
-                    });
-
-                if let Some(base) = base_model {
-                    let base_url = format!(
-                        "https://huggingface.co/{}/raw/main/tokenizer_config.json",
-                        base
-                    );
-                    if let Ok(resp) = client.get(&base_url).send().await {
-                        if resp.status().is_success() {
-                            if let Ok(text) = resp.text().await {
-                                if serde_json::from_str::<serde_json::Value>(&text).is_ok() {
-                                    info!(
-                                        hf_repo = %hf_repo,
-                                        base_model = %base,
-                                        source = "base_model",
-                                        "Captured tokenizer_config.json from base model"
-                                    );
-                                    return Some(text);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if let Some((base, text)) = try_base_model_tokenizer(client, hf_repo).await {
+        info!(
+            hf_repo = %hf_repo,
+            base_model = %base,
+            source = "base_model",
+            "Captured tokenizer_config.json from base model"
+        );
+        return Some(text);
     }
 
     info!(hf_repo = %hf_repo, "No tokenizer_config.json found");

@@ -12,7 +12,34 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine as _;
 
+use crate::config::AppConfig;
+use crate::db::Database;
 use crate::AppState;
+
+/// Try to authenticate via Basic auth (bootstrap credentials).
+/// Returns SessionAuth if valid bootstrap credentials are present, None otherwise.
+pub(crate) async fn try_bootstrap_auth(
+    headers: &axum::http::HeaderMap,
+    config: &AppConfig,
+    db: &Database,
+) -> Option<SessionAuth> {
+    let auth_header = headers.get("authorization").and_then(|v| v.to_str().ok())?;
+    let basic = auth_header.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(basic)
+        .ok()?;
+    let creds = String::from_utf8(decoded).ok()?;
+    let (user, pass) = creds.split_once(':')?;
+    let user_id = bootstrap::validate_bootstrap(config, db, user, pass)
+        .await
+        .ok()?;
+    Some(SessionAuth {
+        user_id,
+        is_admin: true,
+        email: None,
+        display_name: Some(user.to_string()),
+    })
+}
 
 /// Authenticated user context extracted from a valid Bearer token.
 ///
@@ -70,31 +97,9 @@ pub async fn session_auth_middleware(
     next: Next,
 ) -> Result<Response, Response> {
     // Try bootstrap auth from header first
-    if let Some(auth_header) = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Some(basic) = auth_header.strip_prefix("Basic ") {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(basic) {
-                if let Ok(creds) = String::from_utf8(decoded) {
-                    if let Some((user, pass)) = creds.split_once(':') {
-                        if let Ok(user_id) =
-                            bootstrap::validate_bootstrap(&state.config, &state.db, user, pass)
-                                .await
-                        {
-                            req.extensions_mut().insert(SessionAuth {
-                                user_id,
-                                is_admin: true,
-                                email: None,
-                                display_name: Some(user.to_string()),
-                            });
-                            return Ok(next.run(req).await);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(auth) = try_bootstrap_auth(req.headers(), &state.config, &state.db).await {
+        req.extensions_mut().insert(auth);
+        return Ok(next.run(req).await);
     }
 
     // Try session cookie
@@ -154,31 +159,9 @@ pub async fn session_auth_redirect_middleware(
     next: Next,
 ) -> Result<Response, Response> {
     // Try bootstrap auth from header first
-    if let Some(auth_header) = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-    {
-        if let Some(basic) = auth_header.strip_prefix("Basic ") {
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(basic) {
-                if let Ok(creds) = String::from_utf8(decoded) {
-                    if let Some((user, pass)) = creds.split_once(':') {
-                        if let Ok(user_id) =
-                            bootstrap::validate_bootstrap(&state.config, &state.db, user, pass)
-                                .await
-                        {
-                            req.extensions_mut().insert(SessionAuth {
-                                user_id,
-                                is_admin: true,
-                                email: None,
-                                display_name: Some(user.to_string()),
-                            });
-                            return Ok(next.run(req).await);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(auth) = try_bootstrap_auth(req.headers(), &state.config, &state.db).await {
+        req.extensions_mut().insert(auth);
+        return Ok(next.run(req).await);
     }
 
     // Try session cookie
