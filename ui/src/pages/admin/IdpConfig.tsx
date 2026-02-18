@@ -87,7 +87,7 @@ export default function IdpConfig() {
     fetchIdps();
   }, [fetchIdps]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setSubmitting(true);
     setSubmitError(null);
@@ -117,7 +117,8 @@ export default function IdpConfig() {
       resetForm();
       await fetchIdps();
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : editingId ? 'Failed to update IdP' : 'Failed to create IdP');
+      const fallback = editingId ? 'Failed to update IdP' : 'Failed to create IdP';
+      setSubmitError(err instanceof Error ? err.message : fallback);
     } finally {
       setSubmitting(false);
     }
@@ -163,6 +164,11 @@ export default function IdpConfig() {
     setSubmitError(null);
   };
 
+  const getSubmitButtonLabel = () => {
+    if (submitting) return editingId ? 'Saving...' : 'Creating...';
+    return editingId ? 'Save Changes' : 'Create IdP';
+  };
+
   if (loading) return <LoadingSpinner message="Loading identity providers..." />;
   if (error) return <ErrorAlert message={error} onRetry={fetchIdps} />;
 
@@ -191,24 +197,24 @@ export default function IdpConfig() {
           {submitError && <ErrorAlert message={submitError} />}
           <form onSubmit={handleSubmit}>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Name *</label>
-              <input type="text" value={formName} onChange={(e) => setFormName(e.target.value)} style={inputStyle} placeholder="e.g. Google Workspace" required />
+              <label htmlFor="idp-name" style={labelStyle}>Name *</label>
+              <input id="idp-name" type="text" value={formName} onChange={(e) => setFormName(e.target.value)} style={inputStyle} placeholder="e.g. Google Workspace" required />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Issuer URL *</label>
-              <input type="url" value={formIssuer} onChange={(e) => setFormIssuer(e.target.value)} style={inputStyle} placeholder="https://accounts.google.com" required />
+              <label htmlFor="idp-issuer" style={labelStyle}>Issuer URL *</label>
+              <input id="idp-issuer" type="url" value={formIssuer} onChange={(e) => setFormIssuer(e.target.value)} style={inputStyle} placeholder="https://accounts.google.com" required />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Client ID *</label>
-              <input type="text" value={formClientId} onChange={(e) => setFormClientId(e.target.value)} style={inputStyle} required />
+              <label htmlFor="idp-client-id" style={labelStyle}>Client ID *</label>
+              <input id="idp-client-id" type="text" value={formClientId} onChange={(e) => setFormClientId(e.target.value)} style={inputStyle} required />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Client Secret {editingId ? '(leave blank to keep current)' : '*'}</label>
-              <input type="password" value={formClientSecret} onChange={(e) => setFormClientSecret(e.target.value)} style={inputStyle} required={!editingId} />
+              <label htmlFor="idp-client-secret" style={labelStyle}>Client Secret {editingId ? '(leave blank to keep current)' : '*'}</label>
+              <input id="idp-client-secret" type="password" value={formClientSecret} onChange={(e) => setFormClientSecret(e.target.value)} style={inputStyle} required={!editingId} />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Scopes</label>
-              <input type="text" value={formScopes} onChange={(e) => setFormScopes(e.target.value)} style={inputStyle} />
+              <label htmlFor="idp-scopes" style={labelStyle}>Scopes</label>
+              <input id="idp-scopes" type="text" value={formScopes} onChange={(e) => setFormScopes(e.target.value)} style={inputStyle} />
             </div>
             <button
               type="submit"
@@ -222,7 +228,7 @@ export default function IdpConfig() {
                 cursor: submitting ? 'default' : 'pointer',
               }}
             >
-              {submitting ? (editingId ? 'Saving...' : 'Creating...') : (editingId ? 'Save Changes' : 'Create IdP')}
+              {getSubmitButtonLabel()}
             </button>
           </form>
         </div>

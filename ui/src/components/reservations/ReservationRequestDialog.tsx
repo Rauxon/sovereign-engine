@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { useTheme } from '../../theme';
 import { createReservation } from '../../api';
 
-interface ReservationRequestDialogProps {
+type ReservationRequestDialogProps = Readonly<{
   startTime: string;
   endTime: string;
   onCreated: () => void;
   onCancel: () => void;
-}
+}>
 
 /** Convert an ISO string (e.g. "2026-02-15T09:00:00") to datetime-local value ("2026-02-15T09:00") */
 function toDatetimeLocal(iso: string): string {
@@ -63,6 +63,8 @@ export default function ReservationRequestDialog({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       style={{
         position: 'fixed',
         top: 0,
@@ -76,8 +78,15 @@ export default function ReservationRequestDialog({
         zIndex: 1000,
       }}
       onClick={onCancel}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
     >
       <div
+        role="presentation"
         style={{
           background: colors.dialogBg,
           borderRadius: 8,
@@ -87,6 +96,7 @@ export default function ReservationRequestDialog({
           boxShadow: colors.dialogShadow,
         }}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>Request Reservation</h3>
 

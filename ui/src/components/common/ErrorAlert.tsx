@@ -5,7 +5,7 @@ interface ErrorAlertProps {
   onRetry?: () => void;
 }
 
-export default function ErrorAlert({ message, onRetry }: ErrorAlertProps) {
+export default function ErrorAlert({ message, onRetry }: Readonly<ErrorAlertProps>) {
   const { colors } = useTheme();
 
   return (

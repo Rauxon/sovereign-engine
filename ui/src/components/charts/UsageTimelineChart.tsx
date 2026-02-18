@@ -9,7 +9,7 @@ interface UsageTimelineChartProps {
   title?: string;
 }
 
-export default function UsageTimelineChart({ data, models, title }: UsageTimelineChartProps) {
+export default function UsageTimelineChart({ data, models, title }: Readonly<UsageTimelineChartProps>) {
   const { colors } = useTheme();
 
   if (data.length === 0) {
@@ -21,6 +21,10 @@ export default function UsageTimelineChart({ data, models, title }: UsageTimelin
     );
   }
 
+  let xAxisInterval = 0;
+  if (data.length > 30) xAxisInterval = Math.floor(data.length / 10);
+  else if (data.length > 15) xAxisInterval = 2;
+
   return (
     <div>
       {title && <h3 style={{ marginBottom: '0.5rem' }}>{title}</h3>}
@@ -30,7 +34,7 @@ export default function UsageTimelineChart({ data, models, title }: UsageTimelin
           <XAxis
             dataKey="label"
             tick={{ fontSize: 11, fill: colors.textMuted }}
-            interval={data.length > 30 ? Math.floor(data.length / 10) : data.length > 15 ? 2 : 0}
+            interval={xAxisInterval}
             angle={data.length > 15 ? -45 : 0}
             textAnchor={data.length > 15 ? 'end' : 'middle'}
             height={data.length > 15 ? 60 : 30}

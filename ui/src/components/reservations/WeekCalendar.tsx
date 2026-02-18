@@ -2,13 +2,13 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useTheme } from '../../theme';
 import type { ReservationWithUser } from '../../types';
 
-interface WeekCalendarProps {
+type WeekCalendarProps = Readonly<{
   reservations: ReservationWithUser[];
   currentUserId: string;
   onSlotSelect?: (start: string, end: string) => void;
   onReservationClick?: (reservation: ReservationWithUser) => void;
   weekStart?: Date;
-}
+}>
 
 // 48 half-hour slots per day (0 = 00:00, 47 = 23:30)
 const TOTAL_SLOTS = 48;
@@ -141,8 +141,8 @@ export default function WeekCalendar({
         if (rStart >= dayEnd || rEnd <= dayStart) continue;
 
         // Convert to slot positions within this day
-        const effectiveStart = rStart < dayStart ? dayStart : rStart;
-        const effectiveEnd = rEnd > dayEnd ? dayEnd : rEnd;
+        const effectiveStart = new Date(Math.max(rStart.getTime(), dayStart.getTime()));
+        const effectiveEnd = new Date(Math.min(rEnd.getTime(), dayEnd.getTime()));
 
         const startSlot = effectiveStart.getHours() * 2 + (effectiveStart.getMinutes() >= 30 ? 1 : 0);
         // End slot: the last slot that's occupied (end is exclusive in time)
@@ -240,8 +240,8 @@ export default function WeekCalendar({
       dragStart.current = null;
     };
 
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => window.removeEventListener('mouseup', handleMouseUp);
+    globalThis.addEventListener('mouseup', handleMouseUp);
+    return () => globalThis.removeEventListener('mouseup', handleMouseUp);
   }, [days, onSlotSelect]);
 
   const prevWeek = () => setWeekStart((w) => addDays(w, -7));
@@ -331,8 +331,8 @@ export default function WeekCalendar({
               onClick={() => setShowFullDay(false)}
               style={{
                 padding: '0.3rem 0.6rem',
-                background: !showFullDay ? colors.buttonPrimary : 'transparent',
-                color: !showFullDay ? '#fff' : colors.textMuted,
+                background: showFullDay ? 'transparent' : colors.buttonPrimary,
+                color: showFullDay ? colors.textMuted : '#fff',
                 border: 'none',
                 cursor: 'pointer',
                 fontSize: '0.75rem',
@@ -379,7 +379,7 @@ export default function WeekCalendar({
                 marginRight: 3,
                 verticalAlign: 'middle',
               }}
-            />
+            />{' '}
             Yours
           </span>
           <span>
@@ -393,7 +393,7 @@ export default function WeekCalendar({
                 marginRight: 3,
                 verticalAlign: 'middle',
               }}
-            />
+            />{' '}
             Others
           </span>
           <span>
@@ -407,7 +407,7 @@ export default function WeekCalendar({
                 marginRight: 3,
                 verticalAlign: 'middle',
               }}
-            />
+            />{' '}
             Active
           </span>
           <span>
@@ -422,7 +422,7 @@ export default function WeekCalendar({
                 verticalAlign: 'middle',
                 opacity: 0.5,
               }}
-            />
+            />{' '}
             Pending
           </span>
         </div>
@@ -444,9 +444,10 @@ export default function WeekCalendar({
           <div style={{ width: TIME_COL_WIDTH, minWidth: TIME_COL_WIDTH, flexShrink: 0 }} />
           {days.map((day, i) => {
             const isToday = todayStr === day.toDateString();
+            const dayKey = day.toISOString().slice(0, 10);
             return (
               <div
-                key={i}
+                key={dayKey}
                 style={{
                   flex: 1,
                   textAlign: 'center',
@@ -489,10 +490,11 @@ export default function WeekCalendar({
           {days.map((day, dayIdx) => {
             const isToday = todayStr === day.toDateString();
             const blocks = dayBlocks[dayIdx];
+            const dayKey = day.toISOString().slice(0, 10);
 
             return (
               <div
-                key={dayIdx}
+                key={dayKey}
                 style={{
                   flex: 1,
                   position: 'relative',
@@ -518,7 +520,7 @@ export default function WeekCalendar({
                 ))}
 
                 {/* Reservation blocks (zIndex: 2) */}
-                {blocks.map((block, bIdx) => {
+                {blocks.map((block) => {
                   const top = (block.topSlot - visibleStart) * CELL_HEIGHT;
                   const height = (block.bottomSlot - block.topSlot + 1) * CELL_HEIGHT;
                   const bgColor = getReservationColor(block.reservation);
@@ -530,8 +532,16 @@ export default function WeekCalendar({
 
                   return (
                     <div
-                      key={`block-${bIdx}`}
+                      key={block.reservation.id}
+                      role={onReservationClick ? 'button' : undefined}
+                      tabIndex={onReservationClick ? 0 : undefined}
                       onClick={() => onReservationClick?.(block.reservation)}
+                      onKeyDown={onReservationClick ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onReservationClick(block.reservation);
+                        }
+                      } : undefined}
                       title={`${label} (${block.reservation.status})\n${timeLabel}${block.reservation.reason ? '\n' + block.reservation.reason : ''}`}
                       style={{
                         position: 'absolute',
@@ -600,7 +610,13 @@ export default function WeekCalendar({
                   const occupied = isSlotOccupied(dayIdx, slot);
                   const selected = isSelected(dayIdx, slot);
                   const hovered =
-                    hoveredCell && hoveredCell.day === dayIdx && hoveredCell.slot === slot && !occupied;
+                    hoveredCell?.day === dayIdx && hoveredCell?.slot === slot && !occupied;
+
+                  const cellBg = selected
+                    ? colors.badgePurpleBg
+                    : hovered
+                      ? `${colors.buttonPrimary}10`
+                      : 'transparent';
 
                   return (
                     <div
@@ -617,11 +633,7 @@ export default function WeekCalendar({
                         height: CELL_HEIGHT,
                         zIndex: 3,
                         cursor: onSlotSelect ? 'pointer' : 'default',
-                        background: selected
-                          ? colors.badgePurpleBg
-                          : hovered
-                          ? `${colors.buttonPrimary}10`
-                          : 'transparent',
+                        background: cellBg,
                         // Selection overlay has semi-transparent fill
                         opacity: selected ? 0.7 : 1,
                       }}

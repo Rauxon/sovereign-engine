@@ -21,7 +21,7 @@ import ThemeToggle from './components/common/ThemeToggle';
 
 // ---- Login Page ----
 
-function LoginPage({ onLogin }: { onLogin: () => void }) {
+function LoginPage({ onLogin }: Readonly<{ onLogin: () => void }>) {
   const { colors } = useTheme();
   const [providers, setProviders] = useState<AuthProvider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +47,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
     })();
   }, []);
 
-  const handleBasicLogin = async (e: React.FormEvent) => {
+  const handleBasicLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setBasicLoading(true);
     setBasicError(null);
@@ -146,8 +146,9 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
             <form onSubmit={handleBasicLogin} style={{ marginTop: '1rem', textAlign: 'left' }}>
               {basicError && <ErrorAlert message={basicError} />}
               <div style={{ marginBottom: '0.75rem' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Username</label>
+                <label htmlFor="basic-username" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Username</label>
                 <input
+                  id="basic-username"
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
@@ -165,8 +166,9 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
                 />
               </div>
               <div style={{ marginBottom: '0.75rem' }}>
-                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Password</label>
+                <label htmlFor="basic-password" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.85rem', fontWeight: 600, color: colors.textSecondary }}>Password</label>
                 <input
+                  id="basic-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -209,7 +211,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
 
 // ---- Nav Link that highlights active route ----
 
-function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
+function NavLink({ to, children }: Readonly<{ to: string; children: React.ReactNode }>) {
   const location = useLocation();
   const { colors } = useTheme();
   const isActive = location.pathname === to;
@@ -231,7 +233,7 @@ function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
 
 // ---- Authenticated App Shell ----
 
-function ReservationBanner({ userId }: { userId: string }) {
+function ReservationBanner({ userId }: Readonly<{ userId: string }>) {
   const { colors } = useTheme();
   const { snapshot } = useEventStream();
   const active = snapshot?.active_reservation;
@@ -262,14 +264,18 @@ function GpuStatusBar() {
 
   return (
     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-      {gpus.map((gpu, i) => {
+      {gpus.map((gpu) => {
         const usedGb = (gpu.used_mb / 1024).toFixed(1);
         const totalGb = (gpu.total_mb / 1024).toFixed(1);
         const pct = gpu.total_mb > 0 ? Math.round((gpu.used_mb / gpu.total_mb) * 100) : 0;
-        const barColor = pct > 90 ? '#ef4444' : pct > 70 ? '#f59e0b' : colors.successText;
+        let barColor = colors.successText;
+        if (pct > 90) barColor = '#ef4444';
+        else if (pct > 70) barColor = '#f59e0b';
+        const utilSuffix = gpu.utilization_percent == null ? '' : `, ${gpu.utilization_percent}% util`;
+        const gpuTitle = `${gpu.gpu_type} #${gpu.device_index} — ${usedGb}/${totalGb} GB VRAM${utilSuffix}`;
         return (
           <div
-            key={i}
+            key={`${gpu.gpu_type}-${gpu.device_index}`}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -277,7 +283,7 @@ function GpuStatusBar() {
               fontSize: '0.75rem',
               color: colors.navTextInactive,
             }}
-            title={`${gpu.gpu_type} #${gpu.device_index} — ${usedGb}/${totalGb} GB VRAM${gpu.utilization_percent != null ? `, ${gpu.utilization_percent}% util` : ''}`}
+            title={gpuTitle}
           >
             <span style={{ fontWeight: 600, color: colors.navTextInactive }}>
               {gpus.length > 1 ? `GPU${gpu.device_index}` : 'VRAM'}
@@ -350,7 +356,7 @@ function ThemeSelector() {
   );
 }
 
-function UserMenu({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+function UserMenu({ user, onLogout }: Readonly<{ user: AuthUser; onLogout: () => void }>) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -429,7 +435,7 @@ function UserMenu({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
   );
 }
 
-function AuthenticatedApp({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogout: () => void }>) {
   const { colors } = useTheme();
 
   const handleLogout = async () => {

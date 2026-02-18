@@ -141,7 +141,7 @@ export default function TokenManage() {
     setMinted(null);
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!name.trim()) return;
     setSubmitting(true);
@@ -232,8 +232,9 @@ export default function TokenManage() {
           {submitError && <ErrorAlert message={submitError} />}
           <form onSubmit={handleCreate}>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Token Name *</label>
+              <label htmlFor="manage-token-name" style={labelStyle}>Token Name *</label>
               <input
+                id="manage-token-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -244,11 +245,12 @@ export default function TokenManage() {
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Category</label>
+              <label htmlFor="manage-token-category" style={labelStyle}>Category</label>
               {loadingCategories ? (
                 <LoadingSpinner message="Loading categories..." />
               ) : (
                 <select
+                  id="manage-token-category"
                   value={categoryId}
                   onChange={(e) => setCategoryId(e.target.value)}
                   style={{ ...inputStyle, background: colors.inputBg }}
@@ -283,11 +285,12 @@ export default function TokenManage() {
               {showAdvanced && (
                 <div style={{ marginTop: '0.75rem', paddingLeft: '0.5rem', borderLeft: `2px solid ${colors.cardBorder}` }}>
                   <div style={{ marginBottom: '1rem' }}>
-                    <label style={labelStyle}>Specific Model</label>
+                    <label htmlFor="manage-token-model" style={labelStyle}>Specific Model</label>
                     {loadingModels ? (
                       <LoadingSpinner message="Loading models..." />
                     ) : (
                       <select
+                        id="manage-token-model"
                         value={specificModelId}
                         onChange={(e) => setSpecificModelId(e.target.value)}
                         style={{ ...inputStyle, background: colors.inputBg }}

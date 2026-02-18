@@ -137,11 +137,10 @@ export default function Users() {
                       opacity: toggling === user.id ? 0.5 : 1,
                     }}
                   >
-                    {toggling === user.id
-                      ? 'Updating...'
-                      : user.is_admin
-                        ? 'Remove Admin'
-                        : 'Make Admin'}
+                    {(() => {
+                      if (toggling === user.id) return 'Updating...';
+                      return user.is_admin ? 'Remove Admin' : 'Make Admin';
+                    })()}
                   </button>
                 </td>
               </tr>

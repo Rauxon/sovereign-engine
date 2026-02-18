@@ -46,11 +46,13 @@ function formatNumber(n: number): string {
 // Disk Usage Bar
 // ---------------------------------------------------------------------------
 
-function DiskBar({ disk, colors }: { disk: DiskUsage; colors: ThemeColors }) {
+function DiskBar({ disk, colors }: Readonly<{ disk: DiskUsage; colors: ThemeColors }>) {
   const pct = disk.total_bytes > 0
     ? (disk.used_bytes / disk.total_bytes) * 100
     : 0;
-  const barColor = pct >= 95 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+  let barColor = '#22c55e';
+  if (pct >= 95) barColor = '#ef4444';
+  else if (pct >= 80) barColor = '#f59e0b';
 
   return (
     <div style={{ marginBottom: '1.5rem' }}>
@@ -79,12 +81,12 @@ function HfSearch({
   diskFull,
   activeRepos,
   colors,
-}: {
+}: Readonly<{
   onDownload: (repo: string, files?: string[]) => void;
   diskFull: boolean;
   activeRepos: Set<string>;
   colors: ThemeColors;
-}) {
+}>) {
   const [query, setQuery] = useState('');
   const [task, setTask] = useState('text-generation');
   const ggufOnly = true;
@@ -236,7 +238,7 @@ function HfSearch({
                       style={{ ...btnPrimary, padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
                       disabled={diskFull}
                       onClick={() => {
-                        onDownload(pickerRepo!, [f.path]);
+                        if (pickerRepo) onDownload(pickerRepo, [f.path]);
                         setPickerRepo(null);
                       }}
                     >
@@ -316,11 +318,11 @@ function ActiveDownloads({
   downloads,
   onCancel,
   colors,
-}: {
+}: Readonly<{
   downloads: HfDownload[];
   onCancel: (id: string) => void;
   colors: ThemeColors;
-}) {
+}>) {
   if (downloads.length === 0) return null;
 
   const btnDanger: React.CSSProperties = {
@@ -341,11 +343,14 @@ function ActiveDownloads({
           ? (dl.progress_bytes / dl.total_bytes) * 100
           : 0;
         const isActive = dl.status === 'downloading';
-        const barColor =
-          dl.status === 'failed' ? '#ef4444' :
-          dl.status === 'cancelled' ? '#9ca3af' :
-          dl.status === 'complete' ? '#22c55e' :
-          '#2563eb';
+        const barColorMap: Record<string, string> = {
+          failed: '#ef4444',
+          cancelled: '#9ca3af',
+          complete: '#22c55e',
+        };
+        const barColor = barColorMap[dl.status] ?? '#2563eb';
+        const statusLabelMap: Record<string, string> = { complete: 'Complete', failed: 'Failed', cancelled: 'Cancelled' };
+        const statusLabel = statusLabelMap[dl.status] ?? `${pct.toFixed(1)}%`;
 
         return (
           <div key={dl.id} style={{ marginBottom: '0.75rem', padding: '0.75rem', border: `1px solid ${colors.cardBorder}`, borderRadius: 8, background: colors.cardBg }}>
@@ -353,10 +358,7 @@ function ActiveDownloads({
               <span style={{ fontSize: '0.9rem', fontWeight: 500, wordBreak: 'break-all' }}>{dl.hf_repo}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.8rem', color: colors.textMuted }}>
-                  {dl.status === 'complete' ? 'Complete' :
-                   dl.status === 'failed' ? 'Failed' :
-                   dl.status === 'cancelled' ? 'Cancelled' :
-                   `${pct.toFixed(1)}%`}
+                  {statusLabel}
                 </span>
                 {isActive && (
                   <button style={btnDanger} onClick={() => onCancel(dl.id)}>Cancel</button>

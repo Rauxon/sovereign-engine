@@ -28,7 +28,7 @@ function formatDateTime(iso: string): string {
   });
 }
 
-export default function Reservations({ userId }: { userId: string }) {
+export default function Reservations({ userId }: Readonly<{ userId: string }>) {
   const { colors } = useTheme();
   const { reservationRevision: revision } = useEventStream();
 
@@ -302,6 +302,8 @@ export default function Reservations({ userId }: { userId: string }) {
       {/* My Reservations modal */}
       {showMyReservations && (
         <div
+          role="button"
+          tabIndex={0}
           style={{
             position: 'fixed',
             top: 0,
@@ -315,8 +317,15 @@ export default function Reservations({ userId }: { userId: string }) {
             zIndex: 1000,
           }}
           onClick={() => setShowMyReservations(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setShowMyReservations(false);
+            }
+          }}
         >
           <div
+            role="presentation"
             style={{
               background: colors.dialogBg,
               borderRadius: 8,
@@ -328,6 +337,7 @@ export default function Reservations({ userId }: { userId: string }) {
               boxShadow: colors.dialogShadow,
             }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 1rem' }}>
               <h3 style={{ margin: 0, color: colors.textPrimary }}>My Reservations</h3>

@@ -17,7 +17,7 @@ const STATUS_CONFIG: Record<ReservationStatus, BadgeStyle> = {
   cancelled: { label: 'Cancelled', bg: (c) => c.badgeNeutralBg, text: (c) => c.badgeNeutralText },
 };
 
-export default function ReservationStatusBadge({ status }: { status: ReservationStatus }) {
+export default function ReservationStatusBadge({ status }: Readonly<{ status: ReservationStatus }>) {
   const { colors } = useTheme();
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.pending;
 

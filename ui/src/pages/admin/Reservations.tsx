@@ -28,7 +28,7 @@ function formatDateTime(iso: string): string {
 
 type StatusFilter = 'all' | ReservationStatus;
 
-export default function AdminReservations({ userId }: { userId: string }) {
+export default function AdminReservations({ userId }: Readonly<{ userId: string }>) {
   const { colors } = useTheme();
   const { reservationRevision: revision } = useEventStream();
 
@@ -363,6 +363,8 @@ export default function AdminReservations({ userId }: { userId: string }) {
       {/* Approve/Reject dialog with note */}
       {pendingAction && (
         <div
+          role="button"
+          tabIndex={0}
           style={{
             position: 'fixed',
             top: 0,
@@ -376,8 +378,15 @@ export default function AdminReservations({ userId }: { userId: string }) {
             zIndex: 1000,
           }}
           onClick={() => setPendingAction(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setPendingAction(null);
+            }
+          }}
         >
           <div
+            role="presentation"
             style={{
               background: colors.dialogBg,
               borderRadius: 8,
@@ -387,6 +396,7 @@ export default function AdminReservations({ userId }: { userId: string }) {
               boxShadow: colors.dialogShadow,
             }}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
           >
             <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>
               {pendingAction.action === 'approve' ? 'Approve' : 'Reject'} Reservation
@@ -428,25 +438,35 @@ export default function AdminReservations({ userId }: { userId: string }) {
               >
                 Cancel
               </button>
-              <button
-                onClick={handleApproveReject}
-                disabled={acting}
-                style={{
-                  padding: '0.5rem 1rem',
-                  background: acting
-                    ? colors.buttonPrimaryDisabled
-                    : pendingAction.action === 'approve'
+              {(() => {
+                const actionBg = acting
+                  ? colors.buttonPrimaryDisabled
+                  : pendingAction.action === 'approve'
                     ? colors.successText
-                    : colors.buttonDanger,
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: acting ? 'default' : 'pointer',
-                  fontWeight: 600,
-                }}
-              >
-                {acting ? 'Processing...' : pendingAction.action === 'approve' ? 'Approve' : 'Reject'}
-              </button>
+                    : colors.buttonDanger;
+                const actionLabel = acting
+                  ? 'Processing...'
+                  : pendingAction.action === 'approve'
+                    ? 'Approve'
+                    : 'Reject';
+                return (
+                  <button
+                    onClick={handleApproveReject}
+                    disabled={acting}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      background: actionBg,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: acting ? 'default' : 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {actionLabel}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>

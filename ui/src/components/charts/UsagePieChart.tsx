@@ -13,7 +13,7 @@ interface UsagePieChartProps {
   title?: string;
 }
 
-export default function UsagePieChart({ data, title }: UsagePieChartProps) {
+export default function UsagePieChart({ data, title }: Readonly<UsagePieChartProps>) {
   const { colors } = useTheme();
 
   if (data.length === 0) {

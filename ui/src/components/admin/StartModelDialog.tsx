@@ -3,12 +3,12 @@ import { estimateVram, startContainer } from '../../api';
 import type { AdminModel, VramEstimate, ContainerStartRequest } from '../../types';
 import { useTheme } from '../../theme';
 
-interface StartModelDialogProps {
+type StartModelDialogProps = Readonly<{
   model: AdminModel;
   availableGpuTypes: string[];
   onStarted: () => void;
   onCancel: () => void;
-}
+}>
 
 function formatMb(mb: number): string {
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
@@ -160,10 +160,11 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
 
         {/* Context size */}
         <div style={{ marginBottom: '0.75rem' }}>
-          <label style={labelStyle}>Context Size</label>
+          <label htmlFor="start-model-context-size" style={labelStyle}>Context Size</label>
           <select
+            id="start-model-context-size"
             value={contextSize}
-            onChange={(e) => setContextSize(parseInt(e.target.value))}
+            onChange={(e) => setContextSize(Number.parseInt(e.target.value, 10))}
             style={inputStyle}
           >
             {contextSizeOptions(model.context_length || 4096).map((size) => (
@@ -176,10 +177,11 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
 
         {/* Parallel sequences */}
         <div style={{ marginBottom: '0.75rem' }}>
-          <label style={labelStyle}>Parallel Sequences</label>
+          <label htmlFor="start-model-parallel" style={labelStyle}>Parallel Sequences</label>
           <select
+            id="start-model-parallel"
             value={parallel}
-            onChange={(e) => setParallel(parseInt(e.target.value))}
+            onChange={(e) => setParallel(Number.parseInt(e.target.value, 10))}
             style={inputStyle}
           >
             {[1, 2, 4, 8, 16].map((n) => (
@@ -191,8 +193,9 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
         {/* GPU info + layers */}
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
           <div style={{ flex: 1 }}>
-            <label style={labelStyle}>GPU</label>
+            <label htmlFor="start-model-gpu" style={labelStyle}>GPU</label>
             <select
+              id="start-model-gpu"
               value={selectedGpuType}
               onChange={(e) => setSelectedGpuType(e.target.value)}
               style={inputStyle}
@@ -203,11 +206,12 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
             </select>
           </div>
           <div style={{ flex: 1 }}>
-            <label style={labelStyle}>GPU Layers</label>
+            <label htmlFor="start-model-gpu-layers" style={labelStyle}>GPU Layers</label>
             <input
+              id="start-model-gpu-layers"
               type="number"
               value={gpuLayers}
-              onChange={(e) => setGpuLayers(Math.max(0, parseInt(e.target.value) || 0))}
+              onChange={(e) => setGpuLayers(Math.max(0, Number.parseInt(e.target.value, 10) || 0))}
               min={0}
               style={inputStyle}
             />
@@ -217,7 +221,7 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
         {/* VRAM estimation bar */}
         {estimate && hasGpu && barSegments && (
           <div style={{ marginBottom: '1rem' }}>
-            <label style={labelStyle}>VRAM Estimate</label>
+            <span style={labelStyle}>VRAM Estimate</span>
             <div style={{ background: colors.progressBarBg, borderRadius: 8, height: 28, overflow: 'hidden', position: 'relative', marginBottom: '0.35rem' }}>
               {/* Already used by other models */}
               <div

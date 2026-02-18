@@ -1,6 +1,6 @@
 import { useTheme } from '../../theme';
 
-export default function LoadingSpinner({ message = 'Loading...' }: { message?: string }) {
+export default function LoadingSpinner({ message = 'Loading...' }: Readonly<{ message?: string }>) {
   const { colors } = useTheme();
 
   const spinnerStyle: React.CSSProperties = {

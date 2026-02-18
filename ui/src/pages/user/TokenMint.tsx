@@ -70,7 +70,7 @@ export default function TokenMint() {
     })();
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!name.trim()) return;
 
@@ -160,8 +160,9 @@ export default function TokenMint() {
 
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '1rem' }}>
-          <label style={labelStyle}>Token Name *</label>
+          <label htmlFor="mint-token-name" style={labelStyle}>Token Name *</label>
           <input
+            id="mint-token-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -172,11 +173,12 @@ export default function TokenMint() {
         </div>
 
         <div style={{ marginBottom: '1rem' }}>
-          <label style={labelStyle}>Category</label>
+          <label htmlFor="mint-token-category" style={labelStyle}>Category</label>
           {loadingCategories ? (
             <LoadingSpinner message="Loading categories..." />
           ) : (
             <select
+              id="mint-token-category"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
               style={{ ...inputStyle, background: colors.inputBg }}
@@ -211,11 +213,12 @@ export default function TokenMint() {
           {showAdvanced && (
             <div style={{ marginTop: '0.75rem', paddingLeft: '0.5rem', borderLeft: `2px solid ${colors.cardBorder}` }}>
               <div style={{ marginBottom: '1rem' }}>
-                <label style={labelStyle}>Specific Model</label>
+                <label htmlFor="mint-token-model" style={labelStyle}>Specific Model</label>
                 {loadingModels ? (
                   <LoadingSpinner message="Loading models..." />
                 ) : (
                   <select
+                    id="mint-token-model"
                     value={specificModelId}
                     onChange={(e) => setSpecificModelId(e.target.value)}
                     style={{ ...inputStyle, background: colors.inputBg }}

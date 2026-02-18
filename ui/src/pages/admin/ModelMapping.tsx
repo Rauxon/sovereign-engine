@@ -107,7 +107,7 @@ export default function ModelMapping() {
     setShowCatForm(true);
   };
 
-  const handleCatSubmit = async (e: React.FormEvent) => {
+  const handleCatSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setCatSubmitting(true);
     setCatSubmitError(null);
@@ -158,6 +158,11 @@ export default function ModelMapping() {
     return model ? model.hf_repo : modelId;
   };
 
+  const getCatSubmitLabel = () => {
+    if (catSubmitting) return 'Saving...';
+    return editingCat ? 'Update' : 'Create';
+  };
+
   if (loading) return <LoadingSpinner message="Loading model mappings..." />;
   if (error) return <ErrorAlert message={error} onRetry={fetchData} />;
 
@@ -186,16 +191,17 @@ export default function ModelMapping() {
           {catSubmitError && <ErrorAlert message={catSubmitError} />}
           <form onSubmit={handleCatSubmit}>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Name *</label>
-              <input type="text" value={catName} onChange={(e) => setCatName(e.target.value)} style={inputStyle} placeholder="e.g. thinking" required />
+              <label htmlFor="cat-name" style={labelStyle}>Name *</label>
+              <input id="cat-name" type="text" value={catName} onChange={(e) => setCatName(e.target.value)} style={inputStyle} placeholder="e.g. thinking" required />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Description *</label>
-              <input type="text" value={catDescription} onChange={(e) => setCatDescription(e.target.value)} style={inputStyle} placeholder="e.g. Models for complex reasoning" required />
+              <label htmlFor="cat-description" style={labelStyle}>Description *</label>
+              <input id="cat-description" type="text" value={catDescription} onChange={(e) => setCatDescription(e.target.value)} style={inputStyle} placeholder="e.g. Models for complex reasoning" required />
             </div>
             <div style={{ marginBottom: '1rem' }}>
-              <label style={labelStyle}>Preferred Model</label>
+              <label htmlFor="cat-preferred-model" style={labelStyle}>Preferred Model</label>
               <select
+                id="cat-preferred-model"
                 value={catPreferredModel}
                 onChange={(e) => setCatPreferredModel(e.target.value)}
                 style={{ ...inputStyle, background: colors.inputBg }}
@@ -218,7 +224,7 @@ export default function ModelMapping() {
                 cursor: catSubmitting ? 'default' : 'pointer',
               }}
             >
-              {catSubmitting ? 'Saving...' : editingCat ? 'Update' : 'Create'}
+              {getCatSubmitLabel()}
             </button>
           </form>
         </div>
@@ -332,6 +338,7 @@ export default function ModelMapping() {
                 </td>
                 <td style={tdStyle}>
                   <select
+                    aria-label={`Category for ${model.hf_repo}`}
                     value={model.category_id || ''}
                     onChange={(e) => handleModelCategoryChange(model.id, e.target.value)}
                     style={{ padding: '0.3rem 0.5rem', border: `1px solid ${colors.inputBorder}`, borderRadius: 4, fontSize: '0.85rem', background: colors.inputBg, color: colors.textPrimary }}

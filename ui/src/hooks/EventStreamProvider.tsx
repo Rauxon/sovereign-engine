@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import type { MetricsSnapshot } from '../types';
 import { EventStreamContext, type ConnectionStatus } from './useEventStream';
 
@@ -11,7 +11,7 @@ const MAX_RECONNECT_MS = 30_000;
  *
  * Wrap around AuthenticatedApp so every component below can call useEventStream().
  */
-export function EventStreamProvider({ children }: { children: React.ReactNode }) {
+export function EventStreamProvider({ children }: Readonly<{ children: React.ReactNode }>) {
   const [snapshot, setSnapshot] = useState<MetricsSnapshot | null>(null);
   const [reservationRevision, setReservationRevision] = useState(0);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
@@ -71,8 +71,13 @@ export function EventStreamProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
+  const value = useMemo(
+    () => ({ snapshot, reservationRevision, status }),
+    [snapshot, reservationRevision, status],
+  );
+
   return (
-    <EventStreamContext.Provider value={{ snapshot, reservationRevision, status }}>
+    <EventStreamContext.Provider value={value}>
       {children}
     </EventStreamContext.Provider>
   );

@@ -21,7 +21,7 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-function LiveIndicator({ status }: { status: ConnectionStatus }) {
+function LiveIndicator({ status }: Readonly<{ status: ConnectionStatus }>) {
   const { colors } = useTheme();
   const color =
     status === 'connected' ? colors.successText
@@ -48,6 +48,12 @@ function LiveIndicator({ status }: { status: ConnectionStatus }) {
       <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
     </span>
   );
+}
+
+function percentColor(percent: number, colors: { dangerText: string; warningText: string; successText: string }): string {
+  if (percent > 90) return colors.dangerText;
+  if (percent > 70) return colors.warningText;
+  return colors.successText;
 }
 
 export default function System() {
@@ -192,7 +198,7 @@ export default function System() {
             style={{
               height: '100%',
               width: `${diskPercent}%`,
-              background: diskPercent > 90 ? colors.dangerText : diskPercent > 70 ? colors.warningText : colors.successText,
+              background: percentColor(diskPercent, colors),
               borderRadius: 8,
               transition: 'width 0.3s ease',
             }}
@@ -214,7 +220,7 @@ export default function System() {
               style={{
                 height: '100%',
                 width: `${cpu.utilization_percent}%`,
-                background: cpu.utilization_percent > 90 ? colors.dangerText : cpu.utilization_percent > 70 ? colors.warningText : colors.successText,
+                background: percentColor(cpu.utilization_percent, colors),
                 borderRadius: 8,
                 transition: 'width 0.3s ease',
               }}
@@ -253,7 +259,7 @@ export default function System() {
                         style={{
                           height: '100%',
                           width: `${gm.utilization_percent}%`,
-                          background: gm.utilization_percent > 90 ? colors.dangerText : gm.utilization_percent > 70 ? colors.warningText : colors.successText,
+                          background: percentColor(gm.utilization_percent, colors),
                           borderRadius: 8,
                           transition: 'width 0.3s ease',
                         }}
@@ -267,7 +273,7 @@ export default function System() {
                     style={{
                       height: '100%',
                       width: `${vramPercent}%`,
-                      background: vramPercent > 90 ? colors.dangerText : vramPercent > 70 ? colors.warningText : colors.successText,
+                      background: percentColor(vramPercent, colors),
                       borderRadius: 8,
                       transition: 'width 0.3s ease',
                     }}

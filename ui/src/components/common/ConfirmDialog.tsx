@@ -1,13 +1,13 @@
 import { useTheme } from '../../theme';
 
-interface ConfirmDialogProps {
+type ConfirmDialogProps = Readonly<{
   title: string;
   message: string;
   confirmLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
   destructive?: boolean;
-}
+}>
 
 export default function ConfirmDialog({
   title,
@@ -21,6 +21,9 @@ export default function ConfirmDialog({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCancel(); } }}
       style={{
         position: 'fixed',
         top: 0,
@@ -36,6 +39,9 @@ export default function ConfirmDialog({
       onClick={onCancel}
     >
       <div
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.stopPropagation()}
         style={{
           background: colors.dialogBg,
           borderRadius: 8,

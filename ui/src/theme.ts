@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useMemo, createElement } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, createElement } from 'react';
 import type { ReactNode } from 'react';
 
 // ---- Types ----
@@ -209,15 +209,15 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 const STORAGE_KEY = 'sovereign-theme';
 
 function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  if (typeof globalThis.window === 'undefined') return 'light';
+  return globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 // ---- Provider ----
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>(() => {
-    if (typeof window === 'undefined') return 'system';
+export function ThemeProvider({ children }: Readonly<{ children: ReactNode }>) {
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    if (typeof globalThis.window === 'undefined') return 'system';
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
     return 'system';
@@ -227,7 +227,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Listen for OS theme changes
   useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const mq = globalThis.matchMedia('(prefers-color-scheme: dark)');
     const handler = (e: MediaQueryListEvent) => {
       setSystemTheme(e.matches ? 'dark' : 'light');
     };
@@ -235,24 +235,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  const setMode = (newMode: ThemeMode) => {
-    setModeState(newMode);
+  const handleSetMode = useCallback((newMode: ThemeMode) => {
+    setMode(newMode);
     localStorage.setItem(STORAGE_KEY, newMode);
-  };
+  }, []);
 
   const resolvedTheme: ResolvedTheme = mode === 'system' ? systemTheme : mode;
   const colors = resolvedTheme === 'dark' ? darkColors : lightColors;
 
   // Apply to document
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', resolvedTheme);
+    document.documentElement.dataset.theme = resolvedTheme;
     document.body.style.background = colors.pageBg;
     document.body.style.color = colors.textPrimary;
   }, [resolvedTheme, colors]);
 
   const value = useMemo(
-    () => ({ colors, mode, setMode, resolvedTheme }),
-    [colors, mode, resolvedTheme],
+    () => ({ colors, mode, setMode: handleSetMode, resolvedTheme }),
+    [colors, mode, handleSetMode, resolvedTheme],
   );
 
   return createElement(ThemeContext.Provider, { value }, children);
