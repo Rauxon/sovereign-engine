@@ -358,6 +358,10 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     // Subdomain mode: separate API and Chat routers dispatched by Host header.
     let api_router = Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async { axum::response::Redirect::permanent("/portal/") }),
+        )
         .nest("/auth", auth_routes)
         .nest("/api", api_routes)
         .nest("/v1", openai_routes)
