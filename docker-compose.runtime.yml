@@ -67,6 +67,7 @@ services:
       - WEBUI_API_KEY=${WEBUI_API_KEY}
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - DB_ENCRYPTION_KEY=${DB_ENCRYPTION_KEY:-}
+      - DB_ENCRYPTION_KEY_OLD=${DB_ENCRYPTION_KEY_OLD:-}
       - RUST_LOG=${RUST_LOG:-sovereign_engine=info,tower_http=info}
       # ACME (Let's Encrypt) — set ACME_CONTACT to enable; domains derived from hostnames
       - ACME_CONTACT=${ACME_CONTACT:-}

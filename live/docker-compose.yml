@@ -1,0 +1,86 @@
+services:
+  proxy:
+    image: registry.ci.dragonhold.org/dragonhold2024/sovereign-engine:latest
+    ports:
+      - 3000:3000
+    networks:
+      sovereign-public:
+      sovereign-internal:
+      sovereign-openwebui:
+        aliases:
+          - ${API_HOSTNAME}
+          - ${CHAT_HOSTNAME}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/config
+      - /models:/models
+    # Docker socket access for the non-root container user.
+    group_add:
+      - "44"     #Video
+      - "990"    #Docker
+      - "992"    #Render
+    devices:
+      - /dev/dri
+      - /dev/kfd
+    environment:
+      - LISTEN_ADDR=0.0.0.0:3000
+      - DATABASE_URL=sqlite:///config/sovereign.db
+      - API_HOSTNAME=${API_HOSTNAME}
+      - CHAT_HOSTNAME=${CHAT_HOSTNAME}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN}
+      - BREAK_GLASS=false
+      - MODEL_PATH=/models
+      - BACKEND_NETWORK=sovereign-internal
+      - WEBUI_API_KEY=${WEBUI_API_KEY}
+      - SECURE_COOKIES=true
+      - DB_ENCRYPTION_KEY=${DB_ENCRYPTION_KEY:-}
+      - DB_ENCRYPTION_KEY_OLD=${DB_ENCRYPTION_KEY_OLD:-}
+      - RUST_LOG=sovereign_engine=info,tower_http=info
+      - ACME_CONTACT=${ACME_CONTACT}
+      - ACME_STAGING=${ACME_STAGING:-false}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -skf https://localhost:3000/auth/providers || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # Open WebUI — chat interface proxied through Sovereign Engine.
+  #
+  # Auth: Trusted headers from the proxy (X-SE-User-Email, X-SE-User-Name).
+  # API key: Both containers share WEBUI_API_KEY.
+  #
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    networks:
+      - sovereign-openwebui
+    volumes:
+      - ./data/open-webui:/app/backend/data
+    environment:
+      - OPENAI_API_BASE_URL=https://${API_HOSTNAME}:3000/v1
+      - OPENAI_API_KEY=${WEBUI_API_KEY}
+      - OLLAMA_BASE_URL=
+      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-SE-User-Email
+      - WEBUI_AUTH_TRUSTED_NAME_HEADER=X-SE-User-Name
+      - ENABLE_SIGNUP=true
+      - ENABLE_LOGIN_FORM=false
+      - DEFAULT_USER_ROLE=user
+      - BYPASS_MODEL_ACCESS_CONTROL=True
+      - ENABLE_FORWARD_USER_INFO_HEADERS=True
+    depends_on:
+      - proxy
+    restart: unless-stopped
+
+networks:
+  sovereign-public:
+    name: sovereign-public
+    driver: bridge
+  sovereign-internal:
+    name: sovereign-internal
+    driver: bridge
+    internal: true
+  sovereign-openwebui:
+    name: sovereign-openwebui
+    driver: bridge
+    internal: true

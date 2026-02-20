@@ -145,6 +145,7 @@ fn test_config() -> AppConfig {
         queue_timeout_secs: 30,
         secure_cookies: false,
         db_encryption_key: None,
+        db_encryption_key_old: None,
     }
 }
 

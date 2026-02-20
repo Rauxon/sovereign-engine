@@ -32,6 +32,38 @@ pub async fn validate_bootstrap(
     Ok(user_id)
 }
 
+/// Ensure a bootstrap admin user record exists.
+pub async fn ensure_bootstrap_user(db: &Database, username: &str) -> Result<String> {
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM users WHERE subject = ? AND idp_id = 'bootstrap'")
+            .bind(username)
+            .fetch_optional(&db.pool)
+            .await?;
+
+    if let Some((id,)) = existing {
+        return Ok(id);
+    }
+
+    // Create the bootstrap IdP config if it doesn't exist
+    sqlx::query(
+        "INSERT OR IGNORE INTO idp_configs (id, name, issuer, client_id, client_secret_enc, scopes, enabled) VALUES ('bootstrap', 'Bootstrap', 'local', 'bootstrap', '', '', 0)",
+    )
+    .execute(&db.pool)
+    .await?;
+
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO users (id, idp_id, subject, display_name, is_admin) VALUES (?, 'bootstrap', ?, ?, 1)",
+    )
+    .bind(&id)
+    .bind(username)
+    .bind(username)
+    .execute(&db.pool)
+    .await?;
+
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +93,7 @@ mod tests {
             queue_timeout_secs: 30,
             secure_cookies: true,
             db_encryption_key: None,
+            db_encryption_key_old: None,
         }
     }
 
@@ -93,36 +126,4 @@ mod tests {
         let config = test_config(true, None, None);
         assert!(!is_bootstrap_active(&config));
     }
-}
-
-/// Ensure a bootstrap admin user record exists.
-pub async fn ensure_bootstrap_user(db: &Database, username: &str) -> Result<String> {
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM users WHERE subject = ? AND idp_id = 'bootstrap'")
-            .bind(username)
-            .fetch_optional(&db.pool)
-            .await?;
-
-    if let Some((id,)) = existing {
-        return Ok(id);
-    }
-
-    // Create the bootstrap IdP config if it doesn't exist
-    sqlx::query(
-        "INSERT OR IGNORE INTO idp_configs (id, name, issuer, client_id, client_secret_enc, scopes, enabled) VALUES ('bootstrap', 'Bootstrap', 'local', 'bootstrap', '', '', 0)",
-    )
-    .execute(&db.pool)
-    .await?;
-
-    let id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO users (id, idp_id, subject, display_name, is_admin) VALUES (?, 'bootstrap', ?, ?, 1)",
-    )
-    .bind(&id)
-    .bind(username)
-    .bind(username)
-    .execute(&db.pool)
-    .await?;
-
-    Ok(id)
 }

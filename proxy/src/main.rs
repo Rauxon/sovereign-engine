@@ -158,7 +158,8 @@ async fn main() -> Result<()> {
 
     // Encrypt plaintext IdP secrets if encryption key is configured
     if let Some(ref key) = config.db_encryption_key {
-        if let Err(e) = db::crypto::migrate_plaintext_secrets(&state.db, key).await {
+        let old_key = config.db_encryption_key_old.as_deref();
+        if let Err(e) = db::crypto::migrate_plaintext_secrets(&state.db, key, old_key).await {
             error!(error = %e, "Failed to migrate IdP secrets to encrypted form");
         }
     } else {

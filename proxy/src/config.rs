@@ -71,6 +71,12 @@ pub struct AppConfig {
     /// Encryption key for IdP client secrets at rest (env: DB_ENCRYPTION_KEY).
     /// When set, client_secret_enc is AES-256-GCM encrypted. When absent, stored plaintext.
     pub db_encryption_key: Option<String>,
+
+    /// Previous encryption key for key rotation (env: DB_ENCRYPTION_KEY_OLD).
+    /// Set this to the old key when rotating to a new DB_ENCRYPTION_KEY.
+    /// The migration will re-encrypt secrets from old key to new key on startup.
+    /// Remove after one successful startup cycle.
+    pub db_encryption_key_old: Option<String>,
 }
 
 /// ACME configuration derived from hostnames and contact email.
@@ -120,7 +126,12 @@ impl AppConfig {
             secure_cookies: std::env::var("SECURE_COOKIES")
                 .map(|v| !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
-            db_encryption_key: std::env::var("DB_ENCRYPTION_KEY").ok(),
+            db_encryption_key: std::env::var("DB_ENCRYPTION_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            db_encryption_key_old: std::env::var("DB_ENCRYPTION_KEY_OLD")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -212,6 +223,7 @@ mod tests {
             queue_timeout_secs: 30,
             secure_cookies: true,
             db_encryption_key: None,
+            db_encryption_key_old: None,
         }
     }
 
