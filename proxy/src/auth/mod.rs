@@ -90,6 +90,33 @@ pub async fn bearer_auth_middleware(
     Ok(next.run(req).await)
 }
 
+/// Extract all session tokens from the Cookie header.
+///
+/// Browsers may send multiple cookies with the same name (e.g. one from before
+/// subdomain routing without Domain, plus a new one with Domain=.parent).
+/// Returns an iterator over all matching token values.
+pub(crate) fn extract_session_tokens(cookie_header: &str) -> impl Iterator<Item = &str> {
+    let prefix = format!("{}=", sessions::cookie_name());
+    cookie_header.split(';').filter_map(move |c| {
+        let c = c.trim();
+        c.strip_prefix(&prefix)
+    })
+}
+
+/// Try to validate any session cookie from the Cookie header.
+/// Tries each matching `se_session` cookie until one validates.
+pub(crate) async fn validate_any_session(
+    cookie_header: &str,
+    db: &Database,
+) -> Option<sessions::SessionUser> {
+    for token in extract_session_tokens(cookie_header) {
+        if let Ok(user) = sessions::validate_session(db, token).await {
+            return Some(user);
+        }
+    }
+    None
+}
+
 /// Middleware: validate session cookie on /api/* portal requests.
 pub async fn session_auth_middleware(
     State(state): State<Arc<AppState>>,
@@ -102,38 +129,19 @@ pub async fn session_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    // Try session cookie
+    // Try session cookie(s)
     let cookie_header = req
         .headers()
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let session_token = cookie_header
-        .split(';')
-        .filter_map(|c| {
-            let c = c.trim();
-            c.strip_prefix(&format!("{}=", sessions::cookie_name()))
-        })
-        .next();
-
-    let session_token = match session_token {
-        Some(t) => t,
-        None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Authentication required" })),
-            )
-                .into_response());
-        }
-    };
-
-    let session_user = sessions::validate_session(&state.db, session_token)
+    let session_user = validate_any_session(cookie_header, &state.db)
         .await
-        .map_err(|_| {
+        .ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid or expired session" })),
+                Json(serde_json::json!({ "error": "Authentication required" })),
             )
                 .into_response()
         })?;
@@ -166,31 +174,16 @@ pub async fn session_auth_redirect_middleware(
 
     let portal_url = format!("{}/portal/", state.config.api_external_url());
 
-    // Try session cookie
+    // Try session cookie(s)
     let cookie_header = req
         .headers()
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let session_token = cookie_header
-        .split(';')
-        .filter_map(|c| {
-            let c = c.trim();
-            c.strip_prefix(&format!("{}=", sessions::cookie_name()))
-        })
-        .next();
-
-    let session_token = match session_token {
-        Some(t) => t,
-        None => {
-            return Err(unauth_response(&req, &portal_url));
-        }
-    };
-
-    let session_user = sessions::validate_session(&state.db, session_token)
+    let session_user = validate_any_session(cookie_header, &state.db)
         .await
-        .map_err(|_| unauth_response(&req, &portal_url))?;
+        .ok_or_else(|| unauth_response(&req, &portal_url))?;
 
     req.extensions_mut().insert(SessionAuth {
         user_id: session_user.user_id,

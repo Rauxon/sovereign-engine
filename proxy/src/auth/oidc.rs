@@ -368,26 +368,18 @@ async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) 
             .into_response();
     }
 
-    // Fall back to session cookie
-    let session_token = extract_session_token(&headers);
+    // Fall back to session cookie(s) — try all matching cookies
+    let cookie_header = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
 
-    let session_token = match session_token {
-        Some(t) => t,
+    let session_user = match super::validate_any_session(cookie_header, &state.db).await {
+        Some(u) => u,
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "Authentication required" })),
-            )
-                .into_response();
-        }
-    };
-
-    let session_user = match sessions::validate_session(&state.db, session_token).await {
-        Ok(u) => u,
-        Err(_) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid or expired session" })),
             )
                 .into_response();
         }
@@ -404,7 +396,12 @@ async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) 
 
 /// POST /auth/logout — Clear session.
 async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) -> Response {
-    if let Some(token) = extract_session_token(&headers) {
+    // Delete all matching session cookies (browser may send multiple)
+    let cookie_header = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    for token in super::extract_session_tokens(cookie_header) {
         let _ = sessions::delete_session(&state.db, token).await;
     }
 
@@ -419,19 +416,6 @@ async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderM
         Json(serde_json::json!({ "status": "logged_out" })),
     )
         .into_response()
-}
-
-/// Extract the session token from the Cookie header.
-fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<&str> {
-    let cookie_header = headers.get("cookie").and_then(|v| v.to_str().ok())?;
-
-    cookie_header
-        .split(';')
-        .filter_map(|c| {
-            let c = c.trim();
-            c.strip_prefix(&format!("{}=", sessions::cookie_name()))
-        })
-        .next()
 }
 
 // --- Helper functions ---
