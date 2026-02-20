@@ -5,6 +5,7 @@ export interface AuthUser {
   email: string | null;
   display_name: string | null;
   is_admin: boolean;
+  chat_url: string;
 }
 
 export interface AuthProvider {

@@ -464,6 +464,16 @@ function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogou
         <NavLink to="/tokens">Tokens</NavLink>
         <NavLink to="/models">Models</NavLink>
         <NavLink to="/reservations">Reservations</NavLink>
+        <a
+          href={user.chat_url}
+          style={{
+            color: colors.navTextInactive,
+            textDecoration: 'none',
+            fontSize: '0.9rem',
+            borderBottom: '2px solid transparent',
+            paddingBottom: '0.2rem',
+          }}
+        >Chat</a>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <GpuStatusBar />

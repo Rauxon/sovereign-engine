@@ -352,6 +352,7 @@ async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) 
                 "email": auth.email,
                 "display_name": auth.display_name,
                 "is_admin": auth.is_admin,
+                "chat_url": state.config.chat_external_url(),
             })),
         )
             .into_response();
@@ -390,6 +391,7 @@ async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) 
         "email": session_user.email,
         "display_name": session_user.display_name,
         "is_admin": session_user.is_admin,
+        "chat_url": state.config.chat_external_url(),
     }))
     .into_response()
 }
