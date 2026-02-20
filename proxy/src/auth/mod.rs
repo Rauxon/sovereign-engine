@@ -148,10 +148,10 @@ pub async fn session_auth_middleware(
     Ok(next.run(req).await)
 }
 
-/// Middleware: validate session for browser routes, redirecting to /portal if unauthenticated.
+/// Middleware: validate session for browser routes, redirecting to portal if unauthenticated.
 ///
 /// Unlike `session_auth_middleware` which returns 401 JSON, this variant:
-/// - Redirects unauthenticated browser requests (Accept: text/html) to `/portal`
+/// - Redirects unauthenticated browser requests to the API subdomain's portal
 /// - Returns 401 JSON for API-style requests (XHR, fetch, etc.)
 pub async fn session_auth_redirect_middleware(
     State(state): State<Arc<AppState>>,
@@ -163,6 +163,8 @@ pub async fn session_auth_redirect_middleware(
         req.extensions_mut().insert(auth);
         return Ok(next.run(req).await);
     }
+
+    let portal_url = format!("{}/portal/", state.config.api_external_url());
 
     // Try session cookie
     let cookie_header = req
@@ -182,13 +184,13 @@ pub async fn session_auth_redirect_middleware(
     let session_token = match session_token {
         Some(t) => t,
         None => {
-            return Err(unauth_response(&req));
+            return Err(unauth_response(&req, &portal_url));
         }
     };
 
     let session_user = sessions::validate_session(&state.db, session_token)
         .await
-        .map_err(|_| unauth_response(&req))?;
+        .map_err(|_| unauth_response(&req, &portal_url))?;
 
     req.extensions_mut().insert(SessionAuth {
         user_id: session_user.user_id,
@@ -201,7 +203,7 @@ pub async fn session_auth_redirect_middleware(
 }
 
 /// Return a redirect for browser requests, or 401 JSON for API requests.
-fn unauth_response(req: &Request) -> Response {
+fn unauth_response(req: &Request, portal_url: &str) -> Response {
     let accepts_html = req
         .headers()
         .get("accept")
@@ -210,7 +212,7 @@ fn unauth_response(req: &Request) -> Response {
         .unwrap_or(false);
 
     if accepts_html {
-        axum::response::Redirect::temporary("/portal").into_response()
+        axum::response::Redirect::temporary(portal_url).into_response()
     } else {
         (
             StatusCode::UNAUTHORIZED,

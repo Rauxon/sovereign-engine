@@ -1,6 +1,6 @@
 # ADR 002: React SPA at /portal subpath
 
-**Status:** Accepted
+**Status:** Superseded by [ADR 026 — Subdomain routing](026-subdomain-routing.md)
 **Date:** 2026-02-13
 
 ## Context

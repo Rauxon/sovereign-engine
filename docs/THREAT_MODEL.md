@@ -53,7 +53,7 @@ This document maps the attack surfaces of a Sovereign Engine deployment and show
 
 | # | Threat | Mitigation | Status |
 |---|--------|------------|--------|
-| A1 | **Session hijacking** — attacker steals session cookie | HttpOnly (no JS access), SameSite=Lax (no cross-site), Secure flag (no HTTP), SHA-256 hashed in DB, 24h TTL, hourly cleanup | **Mitigated** |
+| A1 | **Session hijacking** — attacker steals session cookie | HttpOnly (no JS access), SameSite=Lax (no cross-site), Secure flag (no HTTP), SHA-256 hashed in DB, 24h TTL, hourly cleanup. Cookie `Domain` attribute set to parent domain for cross-subdomain sharing when `COOKIE_DOMAIN` is configured. | **Mitigated** |
 | A2 | **API token theft** — attacker obtains `se-{uuid}` token | SHA-256 hashed in DB (irreversible), 90-day default expiry, revocation supported, scoped to model/category | **Mitigated** |
 | A3 | **OIDC flow manipulation** — CSRF, replay, code injection | PKCE (SHA-256), random CSRF token, random nonce (verified in ID token), 10-minute state expiry, no HTTP redirects on OIDC client | **Mitigated** |
 | A4 | **Bootstrap brute force** — attacker guesses BOOTSTRAP_PASSWORD | Disabled by default (`BREAK_GLASS=false`), intended for initial setup only. Constant-time comparison prevents timing side-channel. | **Accepted** (not production-facing) |
@@ -93,7 +93,7 @@ This document maps the attack surfaces of a Sovereign Engine deployment and show
 |---|--------|------------|--------|
 | H1 | **Clickjacking** | `X-Frame-Options: DENY` on all responses | **Eliminated** |
 | H2 | **MIME sniffing** | `X-Content-Type-Options: nosniff` on all responses | **Eliminated** |
-| H3 | **Permissive CORS** | Explicit origin (from `EXTERNAL_URL`), explicit methods/headers, `allow_credentials(true)` with SameSite=Lax cookies | **Mitigated** |
+| H3 | **Permissive CORS** | Explicit origins (API + chat subdomain), explicit methods/headers, `allow_credentials(true)` with SameSite=Lax cookies | **Mitigated** |
 | H4 | **Missing CSP** | `Content-Security-Policy` with `script-src 'self' sha256-...` (hashes computed from index.html at startup). `style-src 'self' 'unsafe-inline'` (required by Vite). | **Mitigated** |
 | H5 | **Referrer leakage** | `Referrer-Policy: strict-origin-when-cross-origin` on all responses | **Mitigated** |
 | H6 | **Unnecessary browser features** | `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()` on all responses | **Mitigated** |

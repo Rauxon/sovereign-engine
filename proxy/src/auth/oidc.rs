@@ -91,23 +91,19 @@ async fn login(State(state): State<Arc<AppState>>, Query(query): Query<LoginQuer
         }
     };
 
-    let client = match build_oidc_client(
-        &idp,
-        &state.config.external_url,
-        state.config.db_encryption_key.as_deref(),
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!(error = %e, idp = %query.idp, "Failed to build OIDC client");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "OIDC provider configuration error" })),
-            )
-                .into_response();
-        }
-    };
+    let api_url = state.config.api_external_url();
+    let client =
+        match build_oidc_client(&idp, &api_url, state.config.db_encryption_key.as_deref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(error = %e, idp = %query.idp, "Failed to build OIDC client");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "OIDC provider configuration error" })),
+                )
+                    .into_response();
+            }
+        };
 
     let scopes: Vec<Scope> = idp
         .scopes
@@ -188,23 +184,19 @@ async fn callback(
         }
     };
 
-    let client = match build_oidc_client(
-        &idp,
-        &state.config.external_url,
-        state.config.db_encryption_key.as_deref(),
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            error!(error = %e, "Failed to build OIDC client for callback");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "OIDC configuration error" })),
-            )
-                .into_response();
-        }
-    };
+    let api_url = state.config.api_external_url();
+    let client =
+        match build_oidc_client(&idp, &api_url, state.config.db_encryption_key.as_deref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(error = %e, "Failed to build OIDC client for callback");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "OIDC configuration error" })),
+                )
+                    .into_response();
+            }
+        };
 
     let http_client = build_http_client();
 
@@ -312,11 +304,17 @@ async fn callback(
     // Clean up auth state
     let _ = delete_auth_state(&state.db, &query.state).await;
 
-    // Set cookie and redirect to dashboard
-    let cookie = sessions::build_cookie(&session_token, 86400, state.config.secure_cookies);
+    // Set cookie and redirect to chat subdomain
+    let cookie = sessions::build_cookie(
+        &session_token,
+        86400,
+        state.config.secure_cookies,
+        state.config.cookie_domain.as_deref(),
+    );
 
+    let chat_url = state.config.chat_external_url();
     (
-        [("set-cookie", cookie), ("location", "/".to_string())],
+        [("set-cookie", cookie), ("location", chat_url)],
         StatusCode::FOUND,
     )
         .into_response()
@@ -340,7 +338,12 @@ async fn me(State(state): State<Arc<AppState>>, headers: axum::http::HeaderMap) 
             }
         };
 
-        let cookie = sessions::build_cookie(&session_token, 86400, state.config.secure_cookies);
+        let cookie = sessions::build_cookie(
+            &session_token,
+            86400,
+            state.config.secure_cookies,
+            state.config.cookie_domain.as_deref(),
+        );
 
         return (
             [("set-cookie", cookie)],
@@ -406,7 +409,10 @@ async fn logout(State(state): State<Arc<AppState>>, headers: axum::http::HeaderM
     }
 
     // Clear the cookie regardless
-    let clear_cookie = sessions::clear_cookie(state.config.secure_cookies);
+    let clear_cookie = sessions::clear_cookie(
+        state.config.secure_cookies,
+        state.config.cookie_domain.as_deref(),
+    );
 
     (
         [("set-cookie", clear_cookie)],
@@ -451,7 +457,7 @@ async fn load_idp(db: &Database, idp_id: &str) -> Result<IdpConfig> {
 
 async fn build_oidc_client(
     idp: &IdpConfig,
-    external_url: &str,
+    api_external_url: &str,
     encryption_key: Option<&str>,
 ) -> Result<DiscoveredClient> {
     let issuer_url = IssuerUrl::new(idp.issuer.clone()).context("Invalid issuer URL")?;
@@ -461,7 +467,7 @@ async fn build_oidc_client(
         .await
         .context("OIDC discovery failed")?;
 
-    let redirect_url = RedirectUrl::new(format!("{}/auth/callback", external_url))
+    let redirect_url = RedirectUrl::new(format!("{}/auth/callback", api_external_url))
         .context("Invalid redirect URL")?;
 
     // Decrypt client secret if encryption key is configured

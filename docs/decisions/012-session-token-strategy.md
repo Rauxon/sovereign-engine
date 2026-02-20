@@ -9,7 +9,7 @@ Session management for the React dashboard requires secure cookie-based authenti
 
 ## Decision
 
-Generate session tokens as random 32-byte hex strings. Hash with SHA-256 before storing in the `sessions` table. Set 24-hour TTL (`expires_at` column). Cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` (configurable via `SECURE_COOKIES` for HTTP dev). An hourly cleanup task deletes expired sessions. Cookie name: `se_session`.
+Generate session tokens as random 32-byte hex strings. Hash with SHA-256 before storing in the `sessions` table. Set 24-hour TTL (`expires_at` column). Cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` (configurable via `SECURE_COOKIES` for HTTP dev). When `COOKIE_DOMAIN` is set (e.g. `.example.com`), cookies include a `Domain` attribute for cross-subdomain sharing between the API and chat subdomains (see [ADR 026](026-subdomain-routing.md)). An hourly cleanup task deletes expired sessions. Cookie name: `se_session`.
 
 ## Consequences
 

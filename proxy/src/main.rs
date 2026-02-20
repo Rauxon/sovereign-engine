@@ -17,12 +17,13 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Router;
 use base64::Engine;
 use sha2::{Digest, Sha256};
+use tower::ServiceExt;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -195,15 +196,15 @@ async fn main() -> Result<()> {
     // Start server
     let addr = config.listen_addr.parse::<std::net::SocketAddr>()?;
 
-    if let Some((domain, contact, staging)) = config.acme_config()? {
+    if let Some(acme) = config.acme_config()? {
         if config.tls_cert_path.is_some() || config.tls_key_path.is_some() {
-            warn!("ACME_DOMAIN is set — ignoring TLS_CERT_PATH/TLS_KEY_PATH");
+            warn!("ACME is enabled — ignoring TLS_CERT_PATH/TLS_KEY_PATH");
         }
         info!(
-            "Starting HTTPS server on {} with ACME (domain: {})",
-            addr, domain
+            "Starting HTTPS server on {} with ACME (domains: {:?})",
+            addr, acme.domains
         );
-        tls::serve_acme(app, addr, domain, contact, staging).await?;
+        tls::serve_acme(app, addr, &acme.domains, &acme.contact, acme.staging).await?;
     } else if config.tls_cert_path.is_some() && config.tls_key_path.is_some() {
         info!("Starting HTTPS server on {} with manual TLS", addr);
         tls::serve_tls(app, addr, &config).await?;
@@ -320,8 +321,6 @@ fn build_router(state: Arc<AppState>) -> Router {
     let ui_path = state.config.ui_path.clone();
 
     // Open WebUI reverse proxy (session auth with redirect for browsers).
-    // Built as a separate Router<Arc<AppState>> with .with_state() to produce
-    // a Router<()> service that the main router can use as a fallback.
     let webui_fallback = Router::new()
         .fallback(proxy::webui::webui_proxy_handler)
         .layer(middleware::from_fn_with_state(
@@ -330,7 +329,35 @@ fn build_router(state: Arc<AppState>) -> Router {
         ))
         .with_state(state.clone());
 
-    Router::new()
+    let shared_layers = |router: Router| -> Router {
+        router
+            .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+            .layer(middleware::from_fn(security_headers))
+            .layer(TraceLayer::new_for_http())
+            .layer(CompressionLayer::new())
+            .layer(build_cors_layer(&state.config))
+    };
+
+    // When both hostnames are the same (dev mode / unconfigured), build a combined
+    // router that preserves the pre-subdomain layout: API routes + Open WebUI fallback.
+    if state.config.api_hostname == state.config.chat_hostname {
+        return shared_layers(
+            Router::new()
+                .nest("/auth", auth_routes)
+                .nest("/api", api_routes)
+                .nest("/v1", openai_routes)
+                .nest_service(
+                    "/portal",
+                    tower_http::services::ServeDir::new(&ui_path).fallback(
+                        tower_http::services::ServeFile::new(format!("{}/index.html", ui_path)),
+                    ),
+                )
+                .fallback_service(webui_fallback),
+        );
+    }
+
+    // Subdomain mode: separate API and Chat routers dispatched by Host header.
+    let api_router = Router::new()
         .nest("/auth", auth_routes)
         .nest("/api", api_routes)
         .nest("/v1", openai_routes)
@@ -339,22 +366,56 @@ fn build_router(state: Arc<AppState>) -> Router {
             tower_http::services::ServeDir::new(&ui_path).fallback(
                 tower_http::services::ServeFile::new(format!("{}/index.html", ui_path)),
             ),
-        )
-        .fallback_service(webui_fallback)
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
-        .layer(middleware::from_fn(security_headers))
-        .layer(TraceLayer::new_for_http())
-        .layer(CompressionLayer::new())
-        .layer(build_cors_layer(&state.config.external_url))
+        );
+
+    let api_hostname = state.config.api_hostname.clone();
+    let chat_hostname = state.config.chat_hostname.clone();
+
+    shared_layers(
+        Router::new()
+            .fallback(move |req: axum::extract::Request| {
+                let api_router = api_router.clone();
+                let chat_router = webui_fallback.clone();
+                let api_host = api_hostname.clone();
+                let chat_host = chat_hostname.clone();
+                async move {
+                    let host = req
+                        .headers()
+                        .get("host")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .split(':')
+                        .next()
+                        .unwrap_or("");
+
+                    if host == chat_host {
+                        chat_router.oneshot(req).await.into_response()
+                    } else if host == api_host {
+                        api_router.oneshot(req).await.into_response()
+                    } else {
+                        (StatusCode::MISDIRECTED_REQUEST, "421 Misdirected Request").into_response()
+                    }
+                }
+            })
+            .with_state(state.clone()),
+    )
 }
 
-fn build_cors_layer(external_url: &str) -> CorsLayer {
-    let origin = external_url
+fn build_cors_layer(config: &AppConfig) -> CorsLayer {
+    let api_origin = config
+        .api_external_url()
         .parse::<HeaderValue>()
         .unwrap_or_else(|_| HeaderValue::from_static("http://localhost:3000"));
 
+    let chat_origin = config
+        .chat_external_url()
+        .parse::<HeaderValue>()
+        .unwrap_or_else(|_| HeaderValue::from_static("http://localhost:3000"));
+
+    use tower_http::cors::AllowOrigin;
+
     CorsLayer::new()
-        .allow_origin(origin)
+        .allow_origin(AllowOrigin::list([api_origin, chat_origin]))
         .allow_methods([
             Method::GET,
             Method::POST,

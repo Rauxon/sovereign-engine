@@ -87,20 +87,33 @@ pub fn cookie_name() -> &'static str {
 }
 
 /// Build a Set-Cookie header value for the session cookie.
-pub fn build_cookie(token: &str, max_age: i64, secure: bool) -> String {
+pub fn build_cookie(
+    token: &str,
+    max_age: i64,
+    secure: bool,
+    cookie_domain: Option<&str>,
+) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
+    let domain_attr = match cookie_domain {
+        Some(d) => format!("; Domain={d}"),
+        None => String::new(),
+    };
     format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
-        SESSION_COOKIE_NAME, token, max_age, secure_flag
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}{}",
+        SESSION_COOKIE_NAME, token, max_age, secure_flag, domain_attr
     )
 }
 
 /// Build a Set-Cookie header value that clears the session cookie.
-pub fn clear_cookie(secure: bool) -> String {
+pub fn clear_cookie(secure: bool, cookie_domain: Option<&str>) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
+    let domain_attr = match cookie_domain {
+        Some(d) => format!("; Domain={d}"),
+        None => String::new(),
+    };
     format!(
-        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
-        SESSION_COOKIE_NAME, secure_flag
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}{}",
+        SESSION_COOKIE_NAME, secure_flag, domain_attr
     )
 }
 
@@ -131,7 +144,7 @@ mod tests {
 
     #[test]
     fn build_cookie_contains_required_parts() {
-        let cookie = build_cookie("abc123", 86400, false);
+        let cookie = build_cookie("abc123", 86400, false, None);
         assert!(cookie.contains("se_session=abc123"), "should contain token");
         assert!(cookie.contains("Max-Age=86400"), "should contain max_age");
         assert!(cookie.contains("HttpOnly"), "should contain HttpOnly");
@@ -141,19 +154,37 @@ mod tests {
 
     #[test]
     fn build_cookie_secure_flag_when_true() {
-        let cookie = build_cookie("tok", 3600, true);
+        let cookie = build_cookie("tok", 3600, true, None);
         assert!(cookie.contains("; Secure"), "should contain Secure flag");
     }
 
     #[test]
     fn build_cookie_no_secure_flag_when_false() {
-        let cookie = build_cookie("tok", 3600, false);
+        let cookie = build_cookie("tok", 3600, false, None);
         assert!(!cookie.contains("Secure"), "should not contain Secure flag");
     }
 
     #[test]
+    fn build_cookie_with_domain() {
+        let cookie = build_cookie("tok", 3600, true, Some(".example.com"));
+        assert!(
+            cookie.contains("; Domain=.example.com"),
+            "should contain Domain attribute"
+        );
+    }
+
+    #[test]
+    fn build_cookie_without_domain() {
+        let cookie = build_cookie("tok", 3600, true, None);
+        assert!(
+            !cookie.contains("Domain"),
+            "should not contain Domain attribute"
+        );
+    }
+
+    #[test]
     fn clear_cookie_sets_max_age_zero() {
-        let cookie = clear_cookie(false);
+        let cookie = clear_cookie(false, None);
         assert!(cookie.contains("Max-Age=0"), "should set Max-Age=0");
         assert!(
             cookie.contains("se_session="),
@@ -163,12 +194,30 @@ mod tests {
 
     #[test]
     fn clear_cookie_secure_flag() {
-        let secure = clear_cookie(true);
-        let insecure = clear_cookie(false);
+        let secure = clear_cookie(true, None);
+        let insecure = clear_cookie(false, None);
         assert!(secure.contains("; Secure"), "secure=true should set Secure");
         assert!(
             !insecure.contains("Secure"),
             "secure=false should not set Secure"
+        );
+    }
+
+    #[test]
+    fn clear_cookie_with_domain() {
+        let cookie = clear_cookie(true, Some(".example.com"));
+        assert!(
+            cookie.contains("; Domain=.example.com"),
+            "should contain Domain attribute"
+        );
+    }
+
+    #[test]
+    fn clear_cookie_without_domain() {
+        let cookie = clear_cookie(true, None);
+        assert!(
+            !cookie.contains("Domain"),
+            "should not contain Domain attribute"
         );
     }
 }

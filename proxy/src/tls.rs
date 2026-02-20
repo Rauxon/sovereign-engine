@@ -30,11 +30,11 @@ pub async fn serve_tls(app: Router, addr: SocketAddr, config: &AppConfig) -> Res
 pub async fn serve_acme(
     app: Router,
     addr: SocketAddr,
-    domain: &str,
+    domains: &[String],
     contact: &str,
     staging: bool,
 ) -> Result<()> {
-    let mut state = AcmeConfig::new([domain])
+    let mut state = AcmeConfig::new(domains)
         .contact([format!("mailto:{contact}")])
         .cache(DirCache::new("/config/acme"))
         .directory_lets_encrypt(!staging)

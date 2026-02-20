@@ -9,7 +9,7 @@
 # Production TLS setup (choose one):
 #
 # Option A: Automatic certs via Let's Encrypt (ACME, TLS-ALPN-01)
-#   1. Set ACME_DOMAIN, ACME_CONTACT, LISTEN_ADDR=0.0.0.0:443
+#   1. Set API_HOSTNAME, CHAT_HOSTNAME, COOKIE_DOMAIN, ACME_CONTACT, LISTEN_ADDR=0.0.0.0:443
 #   2. Ensure port 443 is directly reachable from the internet
 #   3. Certs are cached in /config/acme/ (sovereign-config volume)
 #   4. Use ACME_STAGING=true to test against staging endpoint first
@@ -20,7 +20,9 @@
 #        TLS_CERT_PATH=/config/cert.pem
 #        TLS_KEY_PATH=/config/key.pem
 #        LISTEN_ADDR=0.0.0.0:443
-#        EXTERNAL_URL=https://your-domain.example.com
+#        API_HOSTNAME=api.example.com
+#        CHAT_HOSTNAME=chat.example.com
+#        COOKIE_DOMAIN=.example.com
 #   3. Change ports mapping to "443:443"
 #
 # Network architecture:
@@ -41,7 +43,8 @@ services:
       sovereign-internal:
       sovereign-openwebui:
         aliases:
-          - ${ACME_DOMAIN:-proxy}
+          - ${API_HOSTNAME:-proxy}
+          - ${CHAT_HOSTNAME:-proxy}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/config
@@ -53,7 +56,9 @@ services:
     environment:
       - LISTEN_ADDR=0.0.0.0:3000
       - DATABASE_URL=sqlite:///config/sovereign.db
-      - EXTERNAL_URL=${EXTERNAL_URL:-http://localhost:3000}
+      - API_HOSTNAME=${API_HOSTNAME:-localhost}
+      - CHAT_HOSTNAME=${CHAT_HOSTNAME:-localhost}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
       - BOOTSTRAP_USER=${BOOTSTRAP_USER:-admin}
       - BOOTSTRAP_PASSWORD=${BOOTSTRAP_PASSWORD:-changeme}
       - BREAK_GLASS=${BREAK_GLASS:-false}
@@ -63,8 +68,7 @@ services:
       - SECURE_COOKIES=${SECURE_COOKIES:-true}
       - DB_ENCRYPTION_KEY=${DB_ENCRYPTION_KEY:-}
       - RUST_LOG=${RUST_LOG:-sovereign_engine=info,tower_http=info}
-      # ACME (Let's Encrypt) — set in .env to enable
-      - ACME_DOMAIN=${ACME_DOMAIN:-}
+      # ACME (Let's Encrypt) — set ACME_CONTACT to enable; domains derived from hostnames
       - ACME_CONTACT=${ACME_CONTACT:-}
       - ACME_STAGING=${ACME_STAGING:-}
     healthcheck:

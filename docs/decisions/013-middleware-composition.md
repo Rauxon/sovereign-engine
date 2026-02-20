@@ -9,14 +9,19 @@ Different route groups require different authentication strategies: public OIDC 
 
 ## Decision
 
-Compose middleware per route group using axum's nested router structure:
+Compose middleware per route group using axum's nested router structure, dispatched by hostname (see [ADR 026](026-subdomain-routing.md)):
 
+**API subdomain** (`api.<domain>`):
 - `/auth/*` — no middleware (public OIDC login/callback)
 - `/api/*` — `session_auth_middleware` (cookie or Basic auth)
 - `/api/admin/*` — `session_auth_middleware` + `admin_only_middleware`
 - `/v1/*` — `bearer_auth_middleware` (API tokens)
 - `/portal/*` — no auth (static files)
-- `/*` (fallback) — `session_auth_redirect_middleware` (redirects browsers to login, returns 401 for API clients)
+
+**Chat subdomain** (`chat.<domain>`):
+- `/*` (fallback) — `session_auth_redirect_middleware` (redirects browsers to API subdomain portal, returns 401 for API clients)
+
+When `API_HOSTNAME` == `CHAT_HOSTNAME` (dev mode), all routes are combined on a single host with the original fallback behaviour.
 
 Global layers applied bottom-up: `security_headers`, `TraceLayer`, `CompressionLayer`, `CorsLayer`.
 

@@ -81,7 +81,10 @@ The proxy automatically discovers the GIDs that own the GPU device files and for
      - TLS_CERT_PATH=/config/cert.pem
      - TLS_KEY_PATH=/config/key.pem
      - LISTEN_ADDR=0.0.0.0:443
-     - EXTERNAL_URL=https://your-domain.example.com
+     - API_HOSTNAME=api.example.com
+     - CHAT_HOSTNAME=chat.example.com
+     - COOKIE_DOMAIN=.example.com
+     - SECURE_COOKIES=true
    ```
 
 3. **Update port mapping:**
@@ -97,7 +100,7 @@ The proxy automatically discovers the GIDs that own the GPU device files and for
    ```
 
 The proxy auto-detects TLS mode in priority order:
-1. **ACME** — if `ACME_DOMAIN` is set, provisions certs automatically via Let's Encrypt (TLS-ALPN-01). Requires port 443 reachable from the internet. Certs cached in `/config/acme/`.
+1. **ACME** — if `ACME_CONTACT` is set, provisions certs automatically via Let's Encrypt (TLS-ALPN-01) for both `API_HOSTNAME` and `CHAT_HOSTNAME`. Requires port 443 reachable from the internet. Certs cached in `/config/acme/`.
 2. **Manual TLS** — if `TLS_CERT_PATH` and `TLS_KEY_PATH` are set, loads PEM files.
 3. **HTTP** — otherwise, plain HTTP.
 
@@ -127,8 +130,8 @@ Step-by-step for adding an identity provider:
    ```
 
 3. **Configure your IdP's redirect URI:**
-   Set the authorized redirect URI in your IdP to: `{EXTERNAL_URL}/auth/callback`
-   Example: `http://localhost:3000/auth/callback`
+   Set the authorized redirect URI in your IdP to: `https://<API_HOSTNAME>/auth/callback`
+   Example: `https://api.example.com/auth/callback` (or `http://localhost:3000/auth/callback` in dev mode)
 
 4. **Test the login flow:**
    - Open the app in a browser

@@ -37,16 +37,19 @@ pub struct AppConfig {
     /// Static UI files path
     pub ui_path: String,
 
-    /// External URL for OIDC callbacks (e.g. "https://ai.example.com")
-    pub external_url: String,
+    /// API subdomain hostname (e.g. "api.example.com", env: API_HOSTNAME)
+    pub api_hostname: String,
+
+    /// Chat subdomain hostname (e.g. "chat.example.com", env: CHAT_HOSTNAME)
+    pub chat_hostname: String,
+
+    /// Cookie domain for cross-subdomain sharing (e.g. ".example.com", env: COOKIE_DOMAIN)
+    pub cookie_domain: Option<String>,
 
     /// Docker network name for backend containers (internal, isolated)
     pub backend_network: String,
 
-    /// ACME domain — enables automatic Let's Encrypt cert provisioning when set
-    pub acme_domain: Option<String>,
-
-    /// ACME contact email — required when ACME_DOMAIN is set
+    /// ACME contact email — enables automatic Let's Encrypt cert provisioning when set
     pub acme_contact: Option<String>,
 
     /// Use Let's Encrypt staging environment (default false)
@@ -70,6 +73,14 @@ pub struct AppConfig {
     pub db_encryption_key: Option<String>,
 }
 
+/// ACME configuration derived from hostnames and contact email.
+#[derive(Debug, Clone)]
+pub struct AcmeSettings {
+    pub domains: Vec<String>,
+    pub contact: String,
+    pub staging: bool,
+}
+
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
@@ -90,11 +101,11 @@ impl AppConfig {
                 std::env::var("MODEL_PATH").unwrap_or_else(|_| "/models".into())
             }),
             ui_path: std::env::var("UI_PATH").unwrap_or_else(|_| "/app/ui".into()),
-            external_url: std::env::var("EXTERNAL_URL")
-                .unwrap_or_else(|_| "http://localhost:3000".into()),
+            api_hostname: std::env::var("API_HOSTNAME").unwrap_or_else(|_| "localhost".into()),
+            chat_hostname: std::env::var("CHAT_HOSTNAME").unwrap_or_else(|_| "localhost".into()),
+            cookie_domain: std::env::var("COOKIE_DOMAIN").ok(),
             backend_network: std::env::var("BACKEND_NETWORK")
                 .unwrap_or_else(|_| "sovereign-internal".into()),
-            acme_domain: std::env::var("ACME_DOMAIN").ok(),
             acme_contact: std::env::var("ACME_CONTACT").ok(),
             acme_staging: std::env::var("ACME_STAGING")
                 .map(|v| v.eq_ignore_ascii_case("true"))
@@ -144,13 +155,29 @@ impl AppConfig {
         Ok((cert, key))
     }
 
-    /// Return ACME config tuple if ACME_DOMAIN is set.
-    /// Fails fast if domain is set without a contact email.
-    pub fn acme_config(&self) -> Result<Option<(&str, &str, bool)>> {
-        match (&self.acme_domain, &self.acme_contact) {
-            (Some(domain), Some(contact)) => Ok(Some((domain, contact, self.acme_staging))),
-            (Some(_), None) => anyhow::bail!("ACME_DOMAIN is set but ACME_CONTACT is missing"),
-            _ => Ok(None),
+    /// Construct the external URL for the API subdomain.
+    /// Scheme derived from `secure_cookies` (true → https, false → http).
+    pub fn api_external_url(&self) -> String {
+        let scheme = if self.secure_cookies { "https" } else { "http" };
+        format!("{scheme}://{}", self.api_hostname)
+    }
+
+    /// Construct the external URL for the chat subdomain.
+    pub fn chat_external_url(&self) -> String {
+        let scheme = if self.secure_cookies { "https" } else { "http" };
+        format!("{scheme}://{}", self.chat_hostname)
+    }
+
+    /// Return ACME config if ACME_CONTACT is set.
+    /// Derives domains from api_hostname + chat_hostname.
+    pub fn acme_config(&self) -> Result<Option<AcmeSettings>> {
+        match &self.acme_contact {
+            Some(contact) => Ok(Some(AcmeSettings {
+                domains: vec![self.api_hostname.clone(), self.chat_hostname.clone()],
+                contact: contact.clone(),
+                staging: self.acme_staging,
+            })),
+            None => Ok(None),
         }
     }
 }
@@ -174,9 +201,10 @@ mod tests {
             model_path: "/models".into(),
             model_host_path: "/models".into(),
             ui_path: "/app/ui".into(),
-            external_url: "http://localhost:3000".into(),
+            api_hostname: "localhost".into(),
+            chat_hostname: "localhost".into(),
+            cookie_domain: None,
             backend_network: "sovereign-internal".into(),
-            acme_domain: None,
             acme_contact: None,
             acme_staging: false,
             webui_backend_url: "http://open-webui:8080".into(),
@@ -330,55 +358,67 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn acme_config_both_present() {
+    fn acme_config_contact_present() {
         let cfg = AppConfig {
-            acme_domain: Some("ai.example.com".into()),
+            api_hostname: "api.example.com".into(),
+            chat_hostname: "chat.example.com".into(),
             acme_contact: Some("admin@example.com".into()),
             acme_staging: false,
             ..base_config()
         };
-        let result = cfg.acme_config().unwrap();
-        assert_eq!(result, Some(("ai.example.com", "admin@example.com", false)));
+        let result = cfg.acme_config().unwrap().unwrap();
+        assert_eq!(result.domains, vec!["api.example.com", "chat.example.com"]);
+        assert_eq!(result.contact, "admin@example.com");
+        assert!(!result.staging);
     }
 
     #[test]
-    fn acme_config_both_present_staging() {
+    fn acme_config_staging() {
         let cfg = AppConfig {
-            acme_domain: Some("ai.example.com".into()),
+            api_hostname: "api.example.com".into(),
+            chat_hostname: "chat.example.com".into(),
             acme_contact: Some("admin@example.com".into()),
             acme_staging: true,
             ..base_config()
         };
-        let result = cfg.acme_config().unwrap();
-        assert_eq!(result, Some(("ai.example.com", "admin@example.com", true)));
+        let result = cfg.acme_config().unwrap().unwrap();
+        assert!(result.staging);
     }
 
     #[test]
-    fn acme_config_domain_without_contact_fails() {
-        let cfg = AppConfig {
-            acme_domain: Some("ai.example.com".into()),
-            acme_contact: None,
-            ..base_config()
-        };
-        let err = cfg.acme_config().unwrap_err();
-        assert!(err.to_string().contains("ACME_CONTACT"));
-    }
-
-    #[test]
-    fn acme_config_neither_set() {
+    fn acme_config_no_contact_returns_none() {
         let cfg = base_config();
         let result = cfg.acme_config().unwrap();
-        assert_eq!(result, None);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn acme_config_contact_without_domain_returns_none() {
+    fn api_external_url_secure() {
         let cfg = AppConfig {
-            acme_domain: None,
-            acme_contact: Some("admin@example.com".into()),
+            api_hostname: "api.example.com".into(),
+            secure_cookies: true,
             ..base_config()
         };
-        let result = cfg.acme_config().unwrap();
-        assert_eq!(result, None);
+        assert_eq!(cfg.api_external_url(), "https://api.example.com");
+    }
+
+    #[test]
+    fn api_external_url_insecure() {
+        let cfg = AppConfig {
+            api_hostname: "api.example.com".into(),
+            secure_cookies: false,
+            ..base_config()
+        };
+        assert_eq!(cfg.api_external_url(), "http://api.example.com");
+    }
+
+    #[test]
+    fn chat_external_url_secure() {
+        let cfg = AppConfig {
+            chat_hostname: "chat.example.com".into(),
+            secure_cookies: true,
+            ..base_config()
+        };
+        assert_eq!(cfg.chat_external_url(), "https://chat.example.com");
     }
 }

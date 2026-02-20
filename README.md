@@ -31,10 +31,12 @@ Self-contained local AI inference platform. A Rust reverse proxy manages llama.c
                              ┌────────────┴────────────┐
                              │     Proxy (axum)        │
                              │                         │
-                             │  /v1/*     → OpenAI API │
-                             │  /api/*    → Admin/User │
-                             │  /portal/* → React SPA  │
-                             │  /*        → Open WebUI │
+                             │  api.* →                │
+                             │    /v1/*    → OpenAI API│
+                             │    /api/*   → Admin/User│
+                             │    /portal/* → React SPA│
+                             │  chat.* →               │
+                             │    /*       → Open WebUI│
                              │                         │
                              │  [SQLite DB]            │
                              │  [React SPA static]     │
@@ -127,8 +129,7 @@ curl -s http://localhost:3000/api/user/health | jq .
 | `DATABASE_URL` | `sqlite:///config/sovereign.db` | SQLite database URL |
 | `TLS_CERT_PATH` | _(none)_ | Path to TLS certificate PEM file |
 | `TLS_KEY_PATH` | _(none)_ | Path to TLS private key PEM file |
-| `ACME_DOMAIN` | _(none)_ | Domain for automatic Let's Encrypt cert provisioning |
-| `ACME_CONTACT` | _(none)_ | Contact email for ACME (required with `ACME_DOMAIN`) |
+| `ACME_CONTACT` | _(none)_ | Contact email for ACME; enables Let's Encrypt provisioning for both hostnames |
 | `ACME_STAGING` | `false` | Use Let's Encrypt staging environment |
 | `BOOTSTRAP_USER` | _(none)_ | Bootstrap admin username (requires `BREAK_GLASS=true`) |
 | `BOOTSTRAP_PASSWORD` | _(none)_ | Bootstrap admin password (requires `BREAK_GLASS=true`) |
@@ -137,7 +138,9 @@ curl -s http://localhost:3000/api/user/health | jq .
 | `MODEL_PATH` | `/models` | Model storage path (inside the container) |
 | `MODEL_HOST_PATH` | _(same as MODEL_PATH)_ | Host-side path for model bind mounts into child containers |
 | `UI_PATH` | `/app/ui` | Path to static UI files |
-| `EXTERNAL_URL` | `http://localhost:3000` | External URL used for OIDC callback URLs |
+| `API_HOSTNAME` | `localhost` | API subdomain hostname (e.g. `api.example.com`) |
+| `CHAT_HOSTNAME` | `localhost` | Chat subdomain hostname (e.g. `chat.example.com`) |
+| `COOKIE_DOMAIN` | _(none)_ | Cookie domain for cross-subdomain sessions (e.g. `.example.com`) |
 | `BACKEND_NETWORK` | `sovereign-internal` | Docker network for backend container isolation |
 | `WEBUI_BACKEND_URL` | `http://open-webui:8080` | Open WebUI backend URL (internal) |
 | `WEBUI_API_KEY` | _(none)_ | Pre-shared key for Open WebUI → proxy `/v1` calls |
@@ -158,7 +161,7 @@ curl -s http://localhost:3000/api/user/health | jq .
 
 **Option A: Automatic (Let's Encrypt)**
 
-Set `ACME_DOMAIN`, `ACME_CONTACT`, and `LISTEN_ADDR=0.0.0.0:443`. Port 443 must be directly reachable from the internet. Certs are cached in `/config/acme/`.
+Set `API_HOSTNAME`, `CHAT_HOSTNAME`, `COOKIE_DOMAIN`, `ACME_CONTACT`, and `LISTEN_ADDR=0.0.0.0:443`. Port 443 must be directly reachable from the internet. Certs are cached in `/config/acme/` and cover both hostnames.
 
 **Option B: Manual certs**
 

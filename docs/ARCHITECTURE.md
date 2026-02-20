@@ -26,8 +26,8 @@ Single Docker image containing:
 │  │  │  └──────┬─────────────┘                  │  │     │
 │  │  │         │  serves                        │  │     │
 │  │  │  ┌──────┴─────────────┐                  │  │     │
-│  │  │  │  /portal → React   │                  │  │     │
-│  │  │  │  /*      → WebUI   │                  │  │     │
+│  │  │  │ api.* → Portal/API │                  │  │     │
+│  │  │  │ chat.* → WebUI     │                  │  │     │
 │  │  │  └────────────────────┘                  │  │     │
 │  │  └──────────────┬───────────────────────────┘  │     │
 │  │                 │                              │     │
@@ -108,26 +108,33 @@ Client -> Authorization: Bearer se-<uuid> -> bearer_auth_middleware
 
 ### Middleware stack
 
+Routing is split by subdomain (see [ADR 026](decisions/026-subdomain-routing.md)):
+
 ```
-Router
-|-- /auth/*          -> No auth (public routes for OIDC flow)
-|-- /api/*           -> session_auth_middleware (cookie or Basic auth)
-|   +-- /api/admin/* -> + admin_only_middleware (checks SessionAuth.is_admin)
-|-- /v1/*            -> bearer_auth_middleware (API token)
-|-- /portal/*        -> Static file serving (React SPA)
-+-- /*               -> session_auth_redirect_middleware → Open WebUI reverse proxy
+Host-based dispatch (Host header → router selection)
+├── api.<domain>  (API router)
+│   ├── /auth/*          → No auth (public routes for OIDC flow)
+│   ├── /api/*           → session_auth_middleware (cookie or Basic auth)
+│   │   └── /api/admin/* → + admin_only_middleware (checks SessionAuth.is_admin)
+│   ├── /v1/*            → bearer_auth_middleware (API token)
+│   └── /portal/*        → Static file serving (React SPA)
+├── chat.<domain> (Chat router)
+│   └── /*               → session_auth_redirect_middleware → Open WebUI reverse proxy
+└── other                → 421 Misdirected Request
 
 Global layers: security_headers, TraceLayer, CompressionLayer, CorsLayer
 ```
 
+When `API_HOSTNAME` == `CHAT_HOSTNAME` (dev mode), all routes are combined on a single host with Open WebUI as the fallback.
+
 ## Open WebUI Routing
 
-Open WebUI cannot run on a subpath — it assumes it owns `/`. The proxy splits routing:
+Open WebUI cannot run on a subpath — it assumes it owns `/`. The proxy uses subdomain-based routing:
 
-- **`/portal/*`** — Served as static files (React SPA with `base: '/portal/'`). Falls back to `index.html` for SPA routing.
-- **`/*`** (fallback) — Reverse-proxied to Open WebUI (`WEBUI_BACKEND_URL`, default `http://open-webui:8080`). Requires session auth; unauthenticated browsers are redirected to `/auth/providers` instead of receiving a 401.
+- **`api.<domain>/portal/*`** — Served as static files (React SPA with `base: '/portal/'`). Falls back to `index.html` for SPA routing.
+- **`chat.<domain>/*`** — Reverse-proxied to Open WebUI (`WEBUI_BACKEND_URL`, default `http://open-webui:8080`). Requires session auth; unauthenticated browsers are redirected to the API subdomain's portal.
 
-The Open WebUI proxy injects trusted-header SSO so users authenticated via Sovereign Engine's OIDC are automatically logged in to Open WebUI.
+Session cookies are shared across subdomains via `COOKIE_DOMAIN` (e.g. `Domain=.example.com`). The Open WebUI proxy injects trusted-header SSO so users authenticated via Sovereign Engine's OIDC are automatically logged in to Open WebUI.
 
 ## Request Lifecycle (OpenAI API)
 
@@ -206,12 +213,13 @@ settings — standalone key-value table
 ```
 proxy/src/
 ├── main.rs              — Entry point. Loads config, initialises DB/Docker/Scheduler,
-│                          computes CSP hashes from index.html, builds router with
-│                          middleware layers, starts HTTP or HTTPS server.
+│                          computes CSP hashes from index.html, builds host-dispatched
+│                          router with middleware layers, starts HTTP or HTTPS server.
 ├── config.rs            — AppConfig struct. Loads all settings from environment variables.
 │                          Provides helpers: has_bootstrap_creds(), validate_bootstrap_creds(),
-│                          tls_paths(), acme_config().
-├── tls.rs               — TLS server setup using rustls + axum-server. ACME TLS-ALPN-01 support.
+│                          tls_paths(), acme_config(), api_external_url(), chat_external_url().
+├── tls.rs               — TLS server setup using rustls + axum-server. ACME TLS-ALPN-01
+│                          with multi-domain SAN support.
 ├── metrics.rs           — MetricsBroadcaster: collects GPU memory, CPU, disk, queue, container
 │                          stats every 2 s and broadcasts via tokio::broadcast for SSE consumers.
 │
@@ -333,7 +341,7 @@ Recharts library — `UsagePieChart` (usage by category) and `UsageTimelineChart
 | ADR | Decision | Key trade-off |
 |-----|----------|---------------|
 | [001](decisions/001-llamacpp-over-vllm.md) | llama.cpp over vLLM | Simpler codebase, no vLLM features (PagedAttention) |
-| [002](decisions/002-portal-subpath.md) | React SPA at `/portal` subpath | Open WebUI compatibility |
+| [002](decisions/002-portal-subpath.md) | ~~React SPA at `/portal` subpath~~ | Superseded by ADR 026 |
 | [003](decisions/003-model-host-path.md) | MODEL_HOST_PATH for bind mounts | Host vs container path distinction |
 | [004](decisions/004-db-encryption-key.md) | Optional AES-256-GCM for IdP secrets | Security vs deployment simplicity |
 | [005](decisions/005-bootstrap-auth.md) | Break-glass bootstrap auth | Zero-dependency initial setup |
@@ -350,12 +358,14 @@ Recharts library — `UsagePieChart` (usage by category) and `UsageTimelineChart
 | [016](decisions/016-logarithmic-fairness.md) | Logarithmic fairness formula | Intuitive scaling, runtime-tunable |
 | [017](decisions/017-concurrency-gate-raii.md) | Concurrency gate as RAII guard | Guaranteed slot release on drop |
 | [018](decisions/018-reservation-state-machine.md) | Reservation state machine | Auto-transitions, 30s tick delay |
-| [019](decisions/019-oidc-callback-url.md) | OIDC callback from EXTERNAL_URL | Single config point, dual failure mode |
+| [019](decisions/019-oidc-callback-url.md) | OIDC callback from API hostname | API subdomain for auth routes |
 | [020](decisions/020-anyhow-error-handling.md) | Anyhow for errors, no custom types | Less boilerplate, no compile-time error matching |
 | [021](decisions/021-webui-trusted-header-sso.md) | Open WebUI trusted-header SSO | Seamless SSO, relies on network isolation |
 | [022](decisions/022-internal-meta-tokens.md) | Internal and meta token flags | Clean user UX, hidden system plumbing |
 | [023](decisions/023-sse-connection-delay.md) | SSE connection 2s delay | Prevents HTTP/1.1 connection exhaustion on load |
 | [024](decisions/024-huggingface-background-download.md) | HuggingFace background download | No timeout, progress tracking, auto-registration |
+| [025](decisions/025-token-soft-delete.md) | Token soft delete | Preserves usage history |
+| [026](decisions/026-subdomain-routing.md) | Subdomain-based routing | Host dispatch, cross-subdomain cookies |
 
 ### Auth State Management
 
