@@ -187,7 +187,7 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
             onChange={(e) => setParallel(Number.parseInt(e.target.value, 10))}
             style={inputStyle}
           >
-            {[1, 2, 4, 8, 16].map((n) => (
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>

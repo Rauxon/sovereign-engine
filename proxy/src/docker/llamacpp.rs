@@ -120,7 +120,7 @@ impl DockerManager {
             "-ngl".to_string(),
             config.gpu_layers.to_string(),
             "-c".to_string(),
-            config.context_size.to_string(),
+            (config.context_size as u64 * config.parallel as u64).to_string(),
         ];
 
         // Parallel sequences (concurrency slots)
