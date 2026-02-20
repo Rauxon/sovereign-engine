@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-02-20
+
+### Added
+- Subdomain-based routing: `chat.<domain>` for Open WebUI, `api.<domain>` for portal and APIs (ADR 026)
+- Host-based request dispatch via `Host` header with 421 Misdirected Request for unknown hosts
+- Cross-subdomain cookie sharing via `Domain` attribute (`COOKIE_DOMAIN` env var)
+- Multi-domain ACME certificate provisioning (SAN cert for both subdomains)
+- DB encryption key rotation support via `DB_ENCRYPTION_KEY_OLD` env var
+- Empty-key bug recovery: automatic migration from HKDF("") encrypted secrets
+- 7 new migration tests covering all encryption key scenarios
+
+### Changed
+- OIDC callback redirects to `/portal/` instead of chat subdomain after login
+- Session cookie validation now tries all matching cookies (handles stale duplicate cookies)
+- Logout deletes all matching session cookies
+- `EXTERNAL_URL` replaced by `API_HOSTNAME`, `CHAT_HOSTNAME`, `COOKIE_DOMAIN`
+- `ACME_DOMAIN` removed; domains now derived from hostnames when `ACME_CONTACT` is set
+- CORS allows both subdomain origins
+- Dev mode preserved: when both hostnames are `localhost`, combined single-host router is used
+
+### Fixed
+- DB encryption: empty `DB_ENCRYPTION_KEY` was silently treated as a valid key, causing double-encryption when a real key was later set
+- Token management: display bug, expiry support, soft delete
+- API subdomain root (`/`) now redirects to `/portal/` instead of returning 404
+
+### Security
+- DB encryption key rotation without downtime (set old key, deploy new key, remove old key)
+- Config now filters empty `DB_ENCRYPTION_KEY` to prevent accidental encryption with derived-from-nothing key
+
 ## [1.0.2] - 2026-02-18
 
 ### Added

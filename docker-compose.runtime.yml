@@ -35,7 +35,7 @@
 
 services:
   proxy:
-    image: dragonhold2024/sovereign-engine:1.0.0
+    image: dragonhold2024/sovereign-engine:1.1.0
     ports:
       - "${SE_PORT:-3000}:3000"
     networks:
