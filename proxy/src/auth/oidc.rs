@@ -304,7 +304,7 @@ async fn callback(
     // Clean up auth state
     let _ = delete_auth_state(&state.db, &query.state).await;
 
-    // Set cookie and redirect to chat subdomain
+    // Set cookie and redirect to portal
     let cookie = sessions::build_cookie(
         &session_token,
         86400,
@@ -312,9 +312,9 @@ async fn callback(
         state.config.cookie_domain.as_deref(),
     );
 
-    let chat_url = state.config.chat_external_url();
+    let portal_url = format!("{}/portal/", state.config.api_external_url());
     (
-        [("set-cookie", cookie), ("location", chat_url)],
+        [("set-cookie", cookie), ("location", portal_url)],
         StatusCode::FOUND,
     )
         .into_response()
