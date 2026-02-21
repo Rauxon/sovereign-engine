@@ -91,6 +91,10 @@ function LoginPage({ onLogin }: Readonly<{ onLogin: () => void }>) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.5rem' }}>
           <ThemeToggle />
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <a href="https://agentics.org.nz" target="_blank" rel="noopener noreferrer"><img src="/portal/agentics-logo_sml.webp" alt="Agentics NZ" /></a>
+          <a href="https://agentics.org.nz" target="_blank" rel="noopener noreferrer" style={{ fontWeight: 400, fontSize: '18px', color: colors.textMuted, textDecoration: 'none' }}>Agentics NZ</a>
+        </div>
         <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.5rem', color: colors.textPrimary }}>Sovereign Engine</h1>
         <p style={{ margin: '0 0 1.5rem', color: colors.textMuted, fontSize: '0.9rem' }}>Sign in to continue</p>
 
@@ -459,6 +463,9 @@ function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogou
         alignItems: 'center',
         flexWrap: 'wrap',
       }}>
+        <a href="https://agentics.org.nz" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', marginRight: '-1rem' }}>
+          <img src="/portal/agentics-logo_sml.webp" alt="Agentics NZ" style={{ height: 24 }} />
+        </a>
         <strong style={{ fontSize: '1.1rem', marginRight: '0.5rem' }}>Sovereign Engine</strong>
         <NavLink to="/">Dashboard</NavLink>
         <NavLink to="/tokens">Tokens</NavLink>
@@ -483,6 +490,7 @@ function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogou
         {user.is_admin && (
           <>
             <div style={{ flexBasis: '100%', height: 0, borderTop: `1px solid ${colors.navSeparator}` }} />
+            <div style={{ width: 24, marginRight: '-1rem', visibility: 'hidden' }} aria-hidden="true" />
             <strong style={{ fontSize: '1.1rem', marginRight: '0.5rem', visibility: 'hidden' }} aria-hidden="true">Sovereign Engine</strong>
             <NavLink to="/admin/usage">Usage Analytics</NavLink>
             <NavLink to="/admin/idp">IdP Config</NavLink>
