@@ -4,6 +4,7 @@ WORKDIR /build/ui
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm ci
 COPY ui/ .
+COPY docs/ /build/docs/
 RUN npm run build
 
 # Stage 2: Build Rust proxy
