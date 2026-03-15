@@ -319,6 +319,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         auth::bearer_auth_middleware,
     ));
 
+    // Anthropic-compatible routes (bearer token auth required)
+    let anthropic_routes = api::anthropic::routes(state.clone()).layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth::bearer_auth_middleware,
+    ));
+
     let ui_path = state.config.ui_path.clone();
 
     // Open WebUI reverse proxy (session auth with redirect for browsers).
@@ -347,6 +353,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .nest("/auth", auth_routes)
                 .nest("/api", api_routes)
                 .nest("/v1", openai_routes)
+                .nest("/v1", anthropic_routes)
                 .nest_service(
                     "/portal",
                     tower_http::services::ServeDir::new(&ui_path).fallback(
@@ -366,6 +373,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .nest("/auth", auth_routes)
         .nest("/api", api_routes)
         .nest("/v1", openai_routes)
+        .nest("/v1", anthropic_routes)
         .nest_service(
             "/portal",
             tower_http::services::ServeDir::new(&ui_path).fallback(
@@ -432,6 +440,7 @@ fn build_cors_layer(config: &AppConfig) -> CorsLayer {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
             axum::http::header::ACCEPT,
+            axum::http::HeaderName::from_static("x-api-key"),
         ])
         .allow_credentials(true)
 }

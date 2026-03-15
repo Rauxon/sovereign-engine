@@ -66,23 +66,26 @@ pub struct SessionAuth {
     pub display_name: Option<String>,
 }
 
-/// Middleware: validate Bearer token on /v1/* API requests.
+/// Middleware: validate Bearer token or x-api-key on /v1/* API requests.
 pub async fn bearer_auth_middleware(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let auth_header = req
+    // Try Authorization: Bearer <token> first, then fall back to x-api-key header.
+    let token = req
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .or_else(|| {
+            req.headers()
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+        })
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let bearer_token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let auth_user = tokens::validate_token(&state.db, bearer_token)
+    let auth_user = tokens::validate_token(&state.db, token)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 

@@ -1,6 +1,6 @@
 [package]
 name = "sovereign-engine"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "Self-contained local AI inference platform"
 license = "Apache-2.0"
@@ -68,7 +68,11 @@ demo = []
 [dev-dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
+http-body-util = "0.1"
 
 [[example]]
 name = "queue_demo"
 required-features = ["demo"]
+
+[[example]]
+name = "anthropic_proxy"
