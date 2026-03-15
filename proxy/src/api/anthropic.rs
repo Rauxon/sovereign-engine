@@ -1022,6 +1022,12 @@ async fn messages(
                 model.hf_repo, parsed.model
             )
         };
+        warn!(
+            model_id = %model.id,
+            hf_repo = %model.hf_repo,
+            requested = %parsed.model,
+            "Anthropic: model not loaded"
+        );
         return error_response(StatusCode::SERVICE_UNAVAILABLE, "overloaded_error", msg);
     }
 
@@ -1029,6 +1035,11 @@ async fn messages(
     if !auth_user.is_internal {
         if let Some(active) = state.scheduler.active_reservation().await {
             if active.user_id != auth_user.user_id {
+                warn!(
+                    user = %auth_user.user_id,
+                    reserved_by = %active.user_id,
+                    "Anthropic: blocked by reservation"
+                );
                 return error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "overloaded_error",
