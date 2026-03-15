@@ -15,6 +15,7 @@ import Users from './pages/admin/Users';
 import System from './pages/admin/System';
 import AdminReservations from './pages/admin/Reservations';
 import UsageDashboard from './pages/admin/UsageDashboard';
+import UserGuide from './pages/user/UserGuide';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import ErrorAlert from './components/common/ErrorAlert';
 import ThemeToggle from './components/common/ThemeToggle';
@@ -471,6 +472,7 @@ function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogou
         <NavLink to="/tokens">Tokens</NavLink>
         <NavLink to="/models">Models</NavLink>
         <NavLink to="/reservations">Reservations</NavLink>
+        <NavLink to="/guide">Guide</NavLink>
         <a
           href={user.chat_url}
           style={{
@@ -508,6 +510,7 @@ function AuthenticatedApp({ user, onLogout }: Readonly<{ user: AuthUser; onLogou
           <Route path="/tokens" element={<TokenManage />} />
           <Route path="/models" element={<Models />} />
           <Route path="/reservations" element={<UserReservations userId={user.user_id} />} />
+          <Route path="/guide" element={<UserGuide />} />
           {user.is_admin && (
             <>
               <Route path="/admin/usage" element={<UsageDashboard />} />

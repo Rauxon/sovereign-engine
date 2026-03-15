@@ -1,15 +1,24 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
   base: '/portal/',
+  resolve: {
+    alias: {
+      '@docs': path.resolve(__dirname, '../docs'),
+    },
+  },
   server: {
     proxy: {
       '/api': 'http://localhost:31000',
       '/auth': 'http://localhost:31000',
       '/v1': 'http://localhost:31000',
+    },
+    fs: {
+      allow: ['..'],
     },
   },
   build: {

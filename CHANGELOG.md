@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-15
+
+### Added
+- End-user guide covering portal navigation, chat interface, API tokens, model browsing, GPU reservations, and programmatic API usage (`docs/USER_GUIDE.md`)
+- In-app user guide page at `/portal/guide` with themed markdown rendering and download button
+- `react-markdown` and `remark-gfm` dependencies for markdown rendering in the portal
+- Vite `@docs` alias for build-time import of documentation files
+- Guide dynamically replaces placeholder URLs with the actual instance origin
+
+### Changed
+- Navigation bar: added "Guide" link between Reservations and Chat
+- README: added User Guide to documentation links
+
 ## [1.1.0] - 2026-02-20
 
 ### Added

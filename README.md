@@ -2,7 +2,7 @@
 
 Self-contained local AI inference platform. A Rust reverse proxy manages llama.cpp backend containers, provides OIDC authentication, fair-use scheduling, and a React dashboard — all in a single Docker image.
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 
 ## Features
 
@@ -206,6 +206,7 @@ The Vite dev server proxies `/api`, `/auth`, and `/v1` to `http://localhost:3100
 
 ## Documentation
 
+- [User Guide](docs/USER_GUIDE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [API Specification](docs/API.md)
 - [Deployment Guide](docs/DEPLOYMENT.md)
