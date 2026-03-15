@@ -546,7 +546,7 @@ fn translate_openai_response(
 
     let mut content_blocks: Vec<serde_json::Value> = Vec::new();
 
-    if let Some(ref msg) = message {
+    if let Some(msg) = message {
         if let Some(ref text) = msg.content {
             if !text.is_empty() {
                 content_blocks.push(serde_json::json!({
@@ -939,10 +939,7 @@ fn transform_stream(
 // ---------------------------------------------------------------------------
 
 /// POST /v1/messages — Anthropic Messages API
-async fn messages_handler(
-    State(state): State<Arc<ProxyState>>,
-    body: Bytes,
-) -> impl IntoResponse {
+async fn messages_handler(State(state): State<Arc<ProxyState>>, body: Bytes) -> impl IntoResponse {
     let parsed: AnthropicRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -979,7 +976,9 @@ async fn messages_handler(
 
     eprintln!(
         "[proxy] → backend model={} openai_body_bytes={} stream={}",
-        state.default_model, openai_bytes.len(), parsed.stream
+        state.default_model,
+        openai_bytes.len(),
+        parsed.stream
     );
 
     let backend_url = format!("{}/v1/chat/completions", state.backend_url);

@@ -78,11 +78,7 @@ pub async fn bearer_auth_middleware(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .or_else(|| {
-            req.headers()
-                .get("x-api-key")
-                .and_then(|v| v.to_str().ok())
-        })
+        .or_else(|| req.headers().get("x-api-key").and_then(|v| v.to_str().ok()))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     let auth_user = tokens::validate_token(&state.db, token)

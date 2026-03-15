@@ -320,10 +320,9 @@ fn build_router(state: Arc<AppState>) -> Router {
     ));
 
     // Anthropic-compatible routes (bearer token auth required)
-    let anthropic_routes = api::anthropic::routes(state.clone()).layer(middleware::from_fn_with_state(
-        state.clone(),
-        auth::bearer_auth_middleware,
-    ));
+    let anthropic_routes = api::anthropic::routes(state.clone()).layer(
+        middleware::from_fn_with_state(state.clone(), auth::bearer_auth_middleware),
+    );
 
     let ui_path = state.config.ui_path.clone();
 

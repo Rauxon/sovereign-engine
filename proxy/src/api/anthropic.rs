@@ -518,10 +518,7 @@ fn translate_openai_response(
     openai_resp: &OpenAIResponse,
     requested_model: &str,
 ) -> AnthropicResponse {
-    let choice = openai_resp
-        .choices
-        .as_ref()
-        .and_then(|c| c.first());
+    let choice = openai_resp.choices.as_ref().and_then(|c| c.first());
 
     let finish_reason = choice.and_then(|c| c.finish_reason.as_deref());
     let message = choice.and_then(|c| c.message.as_ref());
@@ -529,7 +526,7 @@ fn translate_openai_response(
     let mut content_blocks: Vec<serde_json::Value> = Vec::new();
 
     // Add text content if present
-    if let Some(ref msg) = message {
+    if let Some(msg) = message {
         if let Some(ref text) = msg.content {
             if !text.is_empty() {
                 content_blocks.push(serde_json::json!({
@@ -542,11 +539,7 @@ fn translate_openai_response(
         // Add tool_calls as tool_use content blocks
         if let Some(ref tool_calls) = msg.tool_calls {
             for tc in tool_calls {
-                let id = tc
-                    .id
-                    .as_deref()
-                    .unwrap_or_else(|| "")
-                    .to_string();
+                let id = tc.id.as_deref().unwrap_or("").to_string();
                 // Use the backend-provided ID if available, otherwise generate one
                 let tool_id = if id.is_empty() {
                     generate_tool_use_id()
@@ -588,7 +581,12 @@ fn translate_openai_response(
     let (input_tokens, output_tokens) = openai_resp
         .usage
         .as_ref()
-        .map(|u| (u.prompt_tokens.unwrap_or(0), u.completion_tokens.unwrap_or(0)))
+        .map(|u| {
+            (
+                u.prompt_tokens.unwrap_or(0),
+                u.completion_tokens.unwrap_or(0),
+            )
+        })
         .unwrap_or((0, 0));
 
     AnthropicResponse {
@@ -806,9 +804,7 @@ fn transform_stream(
                                     } else {
                                         // Close text block if it was open and this is
                                         // the first tool call
-                                        if text_block_started
-                                            && tool_calls.is_empty()
-                                        {
+                                        if text_block_started && tool_calls.is_empty() {
                                             let idx = text_block_index.unwrap_or(0);
                                             let block_stop = serde_json::json!({
                                                 "type": "content_block_stop",
@@ -866,10 +862,7 @@ fn transform_stream(
                                                 "input": {},
                                             }
                                         });
-                                        send_event!(
-                                            "content_block_start",
-                                            &block_start
-                                        );
+                                        send_event!("content_block_start", &block_start);
                                     }
 
                                     // Emit argument deltas as input_json_delta
@@ -1104,10 +1097,8 @@ async fn messages(
     let is_streaming = parsed.stream;
 
     // Extract user_id from metadata for meta token resolution (usage attribution)
-    let user_email_override: Option<String> = parsed
-        .metadata
-        .as_ref()
-        .and_then(|m| m.user_id.clone());
+    let user_email_override: Option<String> =
+        parsed.metadata.as_ref().and_then(|m| m.user_id.clone());
 
     // Meta token resolution: if this is an internal token and the request
     // includes a metadata.user_id email, attribute usage to the actual user.
@@ -1155,8 +1146,7 @@ async fn messages(
         let response = if let Some(ref body_bytes) = result.body_bytes {
             match serde_json::from_slice::<OpenAIResponse>(body_bytes) {
                 Ok(openai_resp) => {
-                    let anthropic_resp =
-                        translate_openai_response(&openai_resp, &requested_model);
+                    let anthropic_resp = translate_openai_response(&openai_resp, &requested_model);
                     (StatusCode::OK, Json(anthropic_resp)).into_response()
                 }
                 Err(_) => {
@@ -1240,8 +1230,7 @@ async fn messages(
         let msg_id = generate_message_id();
         let openai_stream = backend_response.bytes_stream();
 
-        let (body, usage_accumulator) =
-            transform_stream(openai_stream, requested_model, msg_id);
+        let (body, usage_accumulator) = transform_stream(openai_stream, requested_model, msg_id);
 
         // Log usage after stream completes
         let db = state.db.clone();
@@ -1678,7 +1667,10 @@ mod tests {
 
         // Translate to OpenAI format
         let openai_body = translate_request(&req);
-        println!("OpenAI request: {}", serde_json::to_string_pretty(&openai_body).unwrap());
+        println!(
+            "OpenAI request: {}",
+            serde_json::to_string_pretty(&openai_body).unwrap()
+        );
 
         // Send to Ollama
         let client = reqwest::Client::new();
@@ -1689,7 +1681,11 @@ mod tests {
             .await
             .expect("Failed to connect to Ollama");
 
-        assert!(resp.status().is_success(), "Ollama returned {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "Ollama returned {}",
+            resp.status()
+        );
 
         let body_bytes = resp.bytes().await.unwrap();
         println!("OpenAI response: {}", String::from_utf8_lossy(&body_bytes));
@@ -1713,7 +1709,10 @@ mod tests {
         assert!(!anthropic_resp.content.is_empty());
         assert_eq!(anthropic_resp.content[0]["type"], "text");
         assert!(
-            anthropic_resp.content[0]["text"].as_str().unwrap().len() > 0,
+            !anthropic_resp.content[0]["text"]
+                .as_str()
+                .unwrap()
+                .is_empty(),
             "Expected non-empty text"
         );
         assert!(anthropic_resp.usage.input_tokens > 0 || anthropic_resp.usage.output_tokens > 0);
@@ -1754,10 +1753,15 @@ mod tests {
             .await
             .expect("Failed to connect to Ollama");
 
-        assert!(resp.status().is_success(), "Ollama returned {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "Ollama returned {}",
+            resp.status()
+        );
 
         let msg_id = generate_message_id();
-        let (body, usage_acc) = transform_stream(resp.bytes_stream(), "llama3.1:8b".to_string(), msg_id);
+        let (body, usage_acc) =
+            transform_stream(resp.bytes_stream(), "llama3.1:8b".to_string(), msg_id);
 
         // Collect all SSE events from the body stream
         use http_body_util::BodyExt;
@@ -1767,14 +1771,35 @@ mod tests {
         println!("--- Raw SSE events ---\n{events}--- End ---");
 
         // Validate event structure
-        assert!(events.contains("event: message_start"), "Missing message_start");
-        assert!(events.contains("event: content_block_start"), "Missing content_block_start");
-        assert!(events.contains("event: content_block_delta"), "Missing content_block_delta");
-        assert!(events.contains("event: content_block_stop"), "Missing content_block_stop");
-        assert!(events.contains("event: message_delta"), "Missing message_delta");
-        assert!(events.contains("event: message_stop"), "Missing message_stop");
+        assert!(
+            events.contains("event: message_start"),
+            "Missing message_start"
+        );
+        assert!(
+            events.contains("event: content_block_start"),
+            "Missing content_block_start"
+        );
+        assert!(
+            events.contains("event: content_block_delta"),
+            "Missing content_block_delta"
+        );
+        assert!(
+            events.contains("event: content_block_stop"),
+            "Missing content_block_stop"
+        );
+        assert!(
+            events.contains("event: message_delta"),
+            "Missing message_delta"
+        );
+        assert!(
+            events.contains("event: message_stop"),
+            "Missing message_stop"
+        );
         assert!(events.contains("event: ping"), "Missing ping");
-        assert!(events.contains("\"type\":\"text_delta\""), "Missing text_delta in deltas");
+        assert!(
+            events.contains("\"type\":\"text_delta\""),
+            "Missing text_delta in deltas"
+        );
 
         // Check usage was accumulated
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1783,7 +1808,9 @@ mod tests {
         if input > 0 || output > 0 {
             println!("✓ Usage tokens captured");
         } else {
-            println!("⚠ No usage tokens in streaming response (Ollama may not support stream_options)");
+            println!(
+                "⚠ No usage tokens in streaming response (Ollama may not support stream_options)"
+            );
         }
 
         println!("✓ Streaming roundtrip passed");
