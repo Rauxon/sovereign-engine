@@ -2,7 +2,7 @@
 
 This guide is for users of a Sovereign Engine instance. It covers how to use the portal, chat with AI models, manage API tokens, browse models, and request GPU reservations.
 
-> **Note:** This guide assumes an administrator has already deployed and configured Sovereign Engine for your organisation. If you need deployment or administration help, see the [Deployment Guide](DEPLOYMENT.md) and [Architecture Overview](ARCHITECTURE.md).
+> **Note:** This guide assumes an administrator has already deployed and configured Sovereign Engine for your organisation. If you need deployment or administration help, ask your administrator for the Deployment Guide and Architecture Overview.
 
 ---
 
@@ -286,12 +286,12 @@ Other users will see a banner informing them the system is reserved.
 
 ## Using the API Programmatically
 
-Sovereign Engine provides an **OpenAI-compatible API** at the `/v1` endpoint. Any tool or library that works with the OpenAI API can be pointed at Sovereign Engine instead.
+Sovereign Engine provides an **OpenAI-compatible API** at `/v1/chat/completions` and an **Anthropic-compatible API** at `/v1/messages`. Any tool or library that works with either API can be pointed at Sovereign Engine instead.
 
 ### Quick Start
 
 1. [Create an API token](#creating-a-token) from the Tokens page.
-2. Use the token in your API requests as a Bearer token.
+2. Use the token in your API requests as a Bearer token or `x-api-key` header.
 
 ### Example: curl
 
@@ -347,16 +347,99 @@ const response = await client.chat.completions.create({
 console.log(response.choices[0].message.content);
 ```
 
+### Example: Python (Anthropic SDK)
+
+Sovereign Engine also supports the Anthropic Messages API at `/v1/messages`. You can use the official Anthropic Python SDK by pointing it at your instance:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="https://your-domain/v1",
+    api_key="se-your-token-here",
+)
+
+message = client.messages.create(
+    model="your-model-name",
+    max_tokens=256,
+    messages=[
+        {"role": "user", "content": "Hello, how are you?"}
+    ],
+)
+
+print(message.content[0].text)
+```
+
+Streaming is also supported:
+
+```python
+with client.messages.stream(
+    model="your-model-name",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Tell me a story."}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+```
+
+### Example: Node.js (Anthropic SDK)
+
+```javascript
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic({
+  baseURL: 'https://your-domain/v1',
+  apiKey: 'se-your-token-here',
+});
+
+const message = await client.messages.create({
+  model: 'your-model-name',
+  max_tokens: 256,
+  messages: [
+    { role: 'user', content: 'Hello, how are you?' }
+  ],
+});
+
+console.log(message.content[0].text);
+```
+
+> **Note:** The Anthropic SDK sends your token via the `x-api-key` header by default. Sovereign Engine accepts both `x-api-key` and `Authorization: Bearer` headers, so no extra configuration is needed.
+
+### Example: Claude Code
+
+You can point [Claude Code](https://docs.anthropic.com/en/docs/claude-code) at your Sovereign Engine instance to use it as the AI backend:
+
+```bash
+ANTHROPIC_BASE_URL=https://your-domain ANTHROPIC_AUTH_TOKEN=se-your-token-here \
+  claude --model your-model-name -p "Your prompt here"
+```
+
+For example, to run a one-shot prompt:
+
+```bash
+ANTHROPIC_BASE_URL=https://your-domain ANTHROPIC_AUTH_TOKEN=se-your-token-here \
+  claude --model your-model-name --dangerously-skip-permissions \
+  -p "Please create a hello world python script called hello.py"
+```
+
+You can also export these as environment variables in your shell profile so Claude Code always uses your Sovereign Engine instance:
+
+```bash
+export ANTHROPIC_BASE_URL=https://your-domain
+export ANTHROPIC_AUTH_TOKEN=se-your-token-here
+```
+
 ### Available Endpoints
 
-The API follows the OpenAI specification. Key endpoints include:
+Key endpoints:
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /v1/models` | List available models |
-| `POST /v1/chat/completions` | Send a chat completion request |
+| `POST /v1/chat/completions` | Chat completion (OpenAI format) |
+| `POST /v1/messages` | Chat completion (Anthropic format) |
 
-For the complete API specification, see the [API Reference](API.md).
+For the complete API specification, ask your administrator for the API Reference document.
 
 ### Token Restrictions
 
@@ -399,4 +482,4 @@ If your token is restricted to a specific **category** or **model**, requests ou
 
 ---
 
-*Sovereign Engine v1.2.0 — [API Reference](API.md) · [Architecture](ARCHITECTURE.md) · [Deployment Guide](DEPLOYMENT.md)*
+*Sovereign Engine v1.3.1*

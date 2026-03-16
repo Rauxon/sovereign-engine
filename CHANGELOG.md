@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-03-16
+
+### Fixed
+- User guide: removed broken cross-doc links that didn't resolve in the in-app renderer at `/portal/guide`
+- User guide: added Anthropic SDK usage examples (Python and Node.js) for the `/v1/messages` endpoint
+- User guide: added Claude Code usage example with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`
+- User guide: updated available endpoints table to include `POST /v1/messages`
+- Version bump to 1.3.1 across README, UI, and docs
+
+## [1.3.0] - 2026-03-15
+
+### Added
+- Anthropic Messages API endpoint at `/v1/messages` with full format translation to OpenAI backend
+- Streaming and non-streaming support for Anthropic Messages format
+- `x-api-key` header authentication support (in addition to existing Bearer token auth)
+- System prompts, multi-turn conversations, stop sequences, and tool definitions for Anthropic format
+- End-to-end test suite for Anthropic endpoint (`tests/test_anthropic_endpoint.py`)
+
 ## [1.2.0] - 2026-03-15
 
 ### Added
