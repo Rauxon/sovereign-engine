@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-03-16
+
+### Changed
+- Container context size is now always determined by the model's `context_length` metadata from the database, removing the user-configurable context size parameter
+- Start Model dialog shows context size as read-only instead of a dropdown selector
+- VRAM estimation uses the model's stored context length instead of a user-supplied value
+- Container start is rejected with a clear error if the model has no `context_length` set, preventing silent fallback to 4096
+
+### Removed
+- `context_size` parameter from admin container start API (`POST /api/admin/containers/start`)
+- `context_size` parameter from reservation container start API (`POST /api/user/reservations/containers/start`)
+- `context_size` parameter from VRAM estimate API (`POST /api/admin/containers/estimate`)
+
 ## [1.3.1] - 2026-03-16
 
 ### Fixed

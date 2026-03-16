@@ -15,18 +15,6 @@ function formatMb(mb: number): string {
   return `${mb} MB`;
 }
 
-function contextSizeOptions(maxContext: number): number[] {
-  const opts: number[] = [];
-  // Start from 4K, but if the model max is smaller, include smaller powers of 2
-  const minStart = Math.min(4096, maxContext);
-  let v = 128;
-  while (v <= maxContext) {
-    if (v >= minStart) opts.push(v);
-    v *= 2;
-  }
-  return opts;
-}
-
 function formatContextSize(n: number): string {
   if (n >= 1024) return `${n / 1024}K`;
   return String(n);
@@ -45,12 +33,7 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
     dialogRef.current?.showModal();
   }, []);
 
-  const defaultContext = model.context_length
-    ? Math.min(model.context_length, 4096)
-    : 4096;
-
   const [selectedGpuType, setSelectedGpuType] = useState(availableGpuTypes[0] ?? 'none');
-  const [contextSize, setContextSize] = useState(defaultContext);
   const [parallel, setParallel] = useState(1);
   const [gpuLayers, setGpuLayers] = useState(99);
   const [estimate, setEstimate] = useState<VramEstimate | null>(null);
@@ -66,14 +49,14 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
     timerRef.current = setTimeout(async () => {
       setEstimateError(null);
       try {
-        const est = await estimateVram(model.id, contextSize, parallel);
+        const est = await estimateVram(model.id, parallel);
         setEstimate(est);
       } catch (err) {
         setEstimateError(err instanceof Error ? err.message : 'Estimate failed');
       }
     }, 300);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [model.id, contextSize, parallel]);
+  }, [model.id, parallel]);
 
   const handleStart = async () => {
     setStarting(true);
@@ -84,7 +67,6 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
         backend_type: 'llamacpp',
         gpu_type: selectedGpuType,
         gpu_layers: gpuLayers,
-        context_size: contextSize,
         parallel,
       };
       await startContainer(req);
@@ -161,21 +143,22 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
           {model.size_bytes > 0 && <span> ({formatMb(Math.round(model.size_bytes / (1024 * 1024)))})</span>}
         </div>
 
-        {/* Context size */}
+        {/* Context size (read-only) */}
         <div style={{ marginBottom: '0.75rem' }}>
-          <label htmlFor="start-model-context-size" style={labelStyle}>Context Size</label>
-          <select
-            id="start-model-context-size"
-            value={contextSize}
-            onChange={(e) => setContextSize(Number.parseInt(e.target.value, 10))}
-            style={inputStyle}
-          >
-            {contextSizeOptions(model.context_length || 4096).map((size) => (
-              <option key={size} value={size}>
-                {formatContextSize(size)} tokens{size === model.context_length ? ' (model max)' : ''}
-              </option>
-            ))}
-          </select>
+          <span style={labelStyle}>Context Size</span>
+          <div style={{
+            padding: '0.5rem',
+            fontSize: '0.9rem',
+            color: colors.textPrimary,
+            background: colors.inputBg,
+            border: `1px solid ${colors.inputBorder}`,
+            borderRadius: 4,
+          }}>
+            {model.context_length
+              ? `${formatContextSize(model.context_length)} tokens`
+              : <span style={{ color: colors.dangerText }}>Not set — model must have context_length metadata</span>
+            }
+          </div>
         </div>
 
         {/* Parallel sequences */}
@@ -307,14 +290,14 @@ export default function StartModelDialog({ model, availableGpuTypes, onStarted, 
           </button>
           <button
             onClick={handleStart}
-            disabled={starting || (hasGpu && !canFit)}
+            disabled={starting || !model.context_length || (hasGpu && !canFit)}
             style={{
               padding: '0.5rem 1rem',
-              background: (starting || (hasGpu && !canFit)) ? colors.buttonPrimaryDisabled : colors.successText,
+              background: (starting || !model.context_length || (hasGpu && !canFit)) ? colors.buttonPrimaryDisabled : colors.successText,
               color: '#fff',
               border: 'none',
               borderRadius: 4,
-              cursor: (starting || (hasGpu && !canFit)) ? 'default' : 'pointer',
+              cursor: (starting || !model.context_length || (hasGpu && !canFit)) ? 'default' : 'pointer',
               fontWeight: 600,
             }}
           >

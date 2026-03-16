@@ -68,7 +68,6 @@ struct ContainerRequest {
     backend_type: Option<String>,
     gpu_type: Option<String>,
     gpu_layers: Option<u32>,
-    context_size: Option<u32>,
     parallel: Option<u32>,
 }
 
@@ -305,7 +304,6 @@ async fn user_start_container(
         backend_type: req.backend_type,
         gpu_type: req.gpu_type,
         gpu_layers: req.gpu_layers,
-        context_size: req.context_size,
         parallel: req.parallel,
     };
 

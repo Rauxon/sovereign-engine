@@ -135,13 +135,11 @@ describe('StartModelDialog', () => {
     await flushEstimate();
   });
 
-  it('renders context size select', async () => {
+  it('renders context size as read-only', async () => {
     renderDialog();
 
-    const select = screen.getByLabelText('Context Size') as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    // Should contain the 4K option (default)
-    expect(select.value).toBe('4096');
+    expect(screen.getByText('Context Size')).toBeTruthy();
+    expect(screen.getByText('8K tokens')).toBeTruthy();
 
     await flushEstimate();
   });
@@ -186,7 +184,7 @@ describe('StartModelDialog', () => {
 
     await flushEstimate();
 
-    expect(mockedEstimateVram).toHaveBeenCalledWith('model-1', 4096, 1);
+    expect(mockedEstimateVram).toHaveBeenCalledWith('model-1', 1);
   });
 
   it('shows VRAM estimation bar when estimate is available and has GPU', async () => {
@@ -228,7 +226,6 @@ describe('StartModelDialog', () => {
         backend_type: 'llamacpp',
         gpu_type: 'cuda',
         gpu_layers: 99,
-        context_size: 4096,
         parallel: 1,
       });
     });

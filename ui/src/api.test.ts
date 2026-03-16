@@ -430,16 +430,16 @@ describe('startContainer()', () => {
 });
 
 describe('estimateVram()', () => {
-  it('sends POST with model_id, context_size, parallel', async () => {
+  it('sends POST with model_id and parallel', async () => {
     const estimate = { model_weights_mb: 4000, kv_cache_mb: 500, overhead_mb: 200, total_mb: 4700, gpu_total_mb: 24000, gpu_used_mb: 0, gpu_free_mb: 24000, fits: true };
     mockFetch.mockResolvedValueOnce(okResponse(estimate));
 
-    const result = await estimateVram('m1', 4096, 4);
+    const result = await estimateVram('m1', 4);
 
     expect(result).toEqual(estimate);
     expect(mockFetch).toHaveBeenCalledWith('/api/admin/containers/estimate', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ model_id: 'm1', context_size: 4096, parallel: 4 }),
+      body: JSON.stringify({ model_id: 'm1', parallel: 4 }),
     }));
   });
 });

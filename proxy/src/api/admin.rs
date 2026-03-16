@@ -20,6 +20,7 @@ use crate::AppState;
 #[derive(sqlx::FromRow)]
 struct ModelMetadataRow {
     size_bytes: i64,
+    context_length: Option<i64>,
     n_layers: Option<i64>,
     n_heads: Option<i64>,
     n_kv_heads: Option<i64>,
@@ -767,7 +768,6 @@ struct StartContainerRequest {
     backend_type: Option<String>,
     gpu_type: Option<String>,
     gpu_layers: Option<u32>,
-    context_size: Option<u32>,
     parallel: Option<u32>,
 }
 
@@ -782,7 +782,6 @@ async fn start_container(
         backend_type: req.backend_type,
         gpu_type: req.gpu_type,
         gpu_layers: req.gpu_layers,
-        context_size: req.context_size,
         parallel: req.parallel,
     };
 
@@ -806,7 +805,6 @@ async fn start_container(
 #[derive(Debug, Deserialize)]
 struct EstimateVramRequest {
     model_id: String,
-    context_size: u32,
     parallel: Option<u32>,
 }
 
@@ -818,7 +816,7 @@ async fn estimate_vram(
     // Look up model metadata
     let model: Option<ModelMetadataRow> =
         match sqlx::query_as(
-            "SELECT size_bytes, n_layers, n_heads, n_kv_heads, embedding_length FROM models WHERE id = ?",
+            "SELECT size_bytes, context_length, n_layers, n_heads, n_kv_heads, embedding_length FROM models WHERE id = ?",
         )
         .bind(&req.model_id)
         .fetch_optional(&state.db.pool)
@@ -832,6 +830,7 @@ async fn estimate_vram(
 
     let ModelMetadataRow {
         size_bytes,
+        context_length,
         n_layers,
         n_heads,
         n_kv_heads,
@@ -847,8 +846,17 @@ async fn estimate_vram(
         }
     };
 
+    let context_size = match context_length {
+        Some(v) => v as u64,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Model has no context_length set — cannot estimate VRAM" })),
+            )
+                .into_response();
+        }
+    };
     let parallel = req.parallel.unwrap_or(1).max(1) as u64;
-    let context_size = req.context_size as u64;
 
     // Model weights: GGUF file size ≈ GPU memory for quantized models
     let model_weights_mb = (size_bytes as u64) / (1024 * 1024);

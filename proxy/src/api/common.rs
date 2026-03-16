@@ -119,7 +119,6 @@ pub struct StartContainerParams {
     pub backend_type: Option<String>,
     pub gpu_type: Option<String>,
     pub gpu_layers: Option<u32>,
-    pub context_size: Option<u32>,
     pub parallel: Option<u32>,
 }
 
@@ -164,6 +163,17 @@ pub async fn start_container_core(
             .into_response()
     })?;
 
+    let context_size = match db_context_length {
+        Some(v) => v as u32,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Model has no context_length set — cannot start container. Re-download or manually set context_length in the database." })),
+            )
+                .into_response());
+        }
+    };
+
     let backend_type = params.backend_type.as_deref().unwrap_or(&db_backend_type);
 
     // Allocate a collision-free UID and generate a per-container API key
@@ -196,9 +206,7 @@ pub async fn start_container_core(
                     params.gpu_type.as_deref().unwrap_or("none"),
                 ),
                 gpu_layers: params.gpu_layers.unwrap_or(99),
-                context_size: params
-                    .context_size
-                    .unwrap_or_else(|| db_context_length.map(|v| v as u32).unwrap_or(4096)),
+                context_size,
                 parallel,
                 uid,
                 api_key: api_key.clone(),

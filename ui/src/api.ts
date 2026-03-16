@@ -302,10 +302,10 @@ export async function startContainer(req: ContainerStartRequest): Promise<{ cont
   });
 }
 
-export async function estimateVram(modelId: string, contextSize: number, parallel: number): Promise<VramEstimate> {
+export async function estimateVram(modelId: string, parallel: number): Promise<VramEstimate> {
   return request<VramEstimate>('/api/admin/containers/estimate', {
     method: 'POST',
-    body: JSON.stringify({ model_id: modelId, context_size: contextSize, parallel }),
+    body: JSON.stringify({ model_id: modelId, parallel }),
   });
 }
 

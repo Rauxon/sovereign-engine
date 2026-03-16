@@ -300,7 +300,6 @@ export interface ContainerStartRequest {
   backend_type?: string;
   gpu_type?: string;
   gpu_layers?: number;
-  context_size?: number;
   parallel?: number;
 }
 
