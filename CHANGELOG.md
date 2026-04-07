@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-04-07
+
+### Fixed
+- Model search now defaults to "any" task type instead of "text-generation", so multimodal models (e.g. Gemma v4, tagged `image-text-to-text`) appear in search results
+- Added "any" option to the task filter dropdown in the model search UI
+
+### Security
+- Bumped `aws-lc-sys` 0.38.0 → 0.39.1 (via `aws-lc-rs` 1.16.2) — fixes GHSA-394x (X.509 name constraints bypass) and GHSA-9f94 (CRL scope check bypass)
+- Bumped `lodash` 4.17.23 → 4.18.1 — fixes CVE-2026-4800 (arbitrary code execution via template imports)
+
 ## [1.4.0] - 2026-03-16
 
 ### Changed
