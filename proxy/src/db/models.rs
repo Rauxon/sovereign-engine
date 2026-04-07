@@ -41,6 +41,8 @@ pub struct Model {
     pub n_heads: Option<i64>,
     pub n_kv_heads: Option<i64>,
     pub embedding_length: Option<i64>,
+    pub key_length: Option<i64>,
+    pub value_length: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

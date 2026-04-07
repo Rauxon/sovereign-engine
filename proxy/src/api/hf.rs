@@ -956,7 +956,7 @@ async fn run_download(
     let size_bytes = total_downloaded as i64;
     let bt = backend_type.as_deref().unwrap_or("llamacpp");
     match sqlx::query(
-        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&model_id)
     .bind(&hf_repo)
@@ -970,6 +970,8 @@ async fn run_download(
     .bind(gguf_meta.head_count.map(|v| v as i64))
     .bind(gguf_meta.head_count_kv.map(|v| v as i64))
     .bind(gguf_meta.embedding_length.map(|v| v as i64))
+    .bind(gguf_meta.key_length.map(|v| v as i64))
+    .bind(gguf_meta.value_length.map(|v| v as i64))
     .execute(&app_state.db.pool)
     .await
     {
@@ -1213,6 +1215,8 @@ pub struct GgufMetadata {
     pub embedding_length: Option<u32>,
     pub head_count: Option<u32>,    // attention.head_count
     pub head_count_kv: Option<u32>, // attention.head_count_kv
+    pub key_length: Option<u32>,    // attention.key_length
+    pub value_length: Option<u32>,  // attention.value_length
 }
 
 /// Read architecture metadata from a GGUF file's header.
@@ -1277,7 +1281,8 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
         String::from_utf8(data).map_err(|e| format!("invalid utf8: {e}"))
     }
 
-    // Helper: read an integer value from common GGUF types
+    // Helper: read a single scalar integer value from common GGUF types.
+    // Returns None for non-integer types (caller should skip_value instead).
     async fn read_int_value(f: &mut tokio::fs::File, vtype: u32) -> Result<Option<u32>, String> {
         match vtype {
             4 => {
@@ -1301,6 +1306,38 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
                 Ok(Some(i64::from_le_bytes(b) as u32))
             }
             _ => Ok(None),
+        }
+    }
+
+    // Helper: read an integer value, handling both scalars and arrays (type 9).
+    // For arrays of integers, returns the max element (conservative for VRAM estimation).
+    // For scalar integers, behaves like read_int_value.
+    // Returns None for non-integer types.
+    async fn read_int_or_max_array(
+        f: &mut tokio::fs::File,
+        vtype: u32,
+    ) -> Result<Option<u32>, String> {
+        if vtype == 9 {
+            // Array: element type (u32) + count (u64) + elements
+            let mut tb = [0u8; 4];
+            f.read_exact(&mut tb).await.map_err(|e| e.to_string())?;
+            let atype = u32::from_le_bytes(tb);
+            let mut cb = [0u8; 8];
+            f.read_exact(&mut cb).await.map_err(|e| e.to_string())?;
+            let count = u64::from_le_bytes(cb);
+
+            let mut max_val: Option<u32> = None;
+            for _ in 0..count {
+                if let Some(v) = read_int_value(f, atype).await? {
+                    max_val = Some(max_val.map_or(v, |cur| cur.max(v)));
+                } else {
+                    // Array of non-integer type — skip remaining and return None
+                    Box::pin(skip_value(f, atype)).await?;
+                }
+            }
+            Ok(max_val)
+        } else {
+            read_int_value(f, vtype).await
         }
     }
 
@@ -1351,6 +1388,8 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
     const EMBEDDING_LENGTH: &str = ".embedding_length";
     const HEAD_COUNT: &str = ".attention.head_count";
     const HEAD_COUNT_KV: &str = ".attention.head_count_kv";
+    const KEY_LENGTH: &str = ".attention.key_length";
+    const VALUE_LENGTH: &str = ".attention.value_length";
 
     for _ in 0..n_kv {
         let key = read_string(&mut f).await?;
@@ -1360,16 +1399,29 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
             .map_err(|e| format!("read type: {e}"))?;
         let vtype = u32::from_le_bytes(tb);
 
+        // head_count_kv may be an array (per-layer) in heterogeneous-attention
+        // models like Gemma 4 — handle it separately with read_int_or_max_array.
+        if key.ends_with(HEAD_COUNT_KV) {
+            if let Some(val) = read_int_or_max_array(&mut f, vtype).await? {
+                meta.head_count_kv = Some(val);
+            } else {
+                skip_value(&mut f, vtype).await?;
+            }
+            continue;
+        }
+
         let target = if key.ends_with(CONTEXT_LENGTH) {
             Some(&mut meta.context_length)
         } else if key.ends_with(BLOCK_COUNT) {
             Some(&mut meta.block_count)
         } else if key.ends_with(EMBEDDING_LENGTH) {
             Some(&mut meta.embedding_length)
-        } else if key.ends_with(HEAD_COUNT) && !key.ends_with(HEAD_COUNT_KV) {
+        } else if key.ends_with(HEAD_COUNT) {
             Some(&mut meta.head_count)
-        } else if key.ends_with(HEAD_COUNT_KV) {
-            Some(&mut meta.head_count_kv)
+        } else if key.ends_with(KEY_LENGTH) {
+            Some(&mut meta.key_length)
+        } else if key.ends_with(VALUE_LENGTH) {
+            Some(&mut meta.value_length)
         } else {
             None
         };
@@ -1619,5 +1671,128 @@ mod tests {
         assert!(encoded.contains('%'));
         // 'é' is U+00E9, encoded as %C3%A9 in UTF-8
         assert_eq!(encoded, "caf%C3%A9");
+    }
+
+    // -- read_gguf_metadata (binary blob tests) ------------------------------
+
+    /// Build a minimal valid GGUF file with the given key-value pairs.
+    /// Each entry is (key, vtype, raw_value_bytes).
+    fn build_gguf(entries: &[(&str, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        // Magic
+        buf.extend_from_slice(b"GGUF");
+        // Version (3)
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        // n_tensors (0)
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        // n_kv
+        buf.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+        for (key, vtype, value_bytes) in entries {
+            // String key: u64 len + bytes
+            buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            buf.extend_from_slice(key.as_bytes());
+            // Type tag
+            buf.extend_from_slice(&vtype.to_le_bytes());
+            // Raw value
+            buf.extend_from_slice(value_bytes);
+        }
+        buf
+    }
+
+    /// Encode a GGUF array value: element_type (u32) + count (u64) + elements
+    fn gguf_array_i32(values: &[i32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&5u32.to_le_bytes()); // element type = i32
+        buf.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for v in values {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        buf
+    }
+
+    async fn parse_gguf_bytes(data: &[u8]) -> GgufMetadata {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "gguf_test_{}_{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.gguf");
+        std::fs::write(&path, data).unwrap();
+        let result = read_gguf_metadata(path.to_str().unwrap()).await;
+        std::fs::remove_dir_all(&dir).ok();
+        result.expect("Failed to parse GGUF")
+    }
+
+    #[tokio::test]
+    async fn gguf_scalar_head_count_kv() {
+        let data = build_gguf(&[
+            ("llama.block_count", 4, 32u32.to_le_bytes().to_vec()),       // u32
+            ("llama.embedding_length", 4, 4096u32.to_le_bytes().to_vec()),
+            ("llama.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
+            ("llama.attention.head_count_kv", 5, 8i32.to_le_bytes().to_vec()), // i32
+            ("llama.context_length", 4, 2048u32.to_le_bytes().to_vec()),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.head_count_kv, Some(8));
+        assert_eq!(meta.head_count, Some(32));
+        assert_eq!(meta.block_count, Some(32));
+        assert_eq!(meta.embedding_length, Some(4096));
+        assert_eq!(meta.context_length, Some(2048));
+        assert_eq!(meta.key_length, None);
+        assert_eq!(meta.value_length, None);
+    }
+
+    #[tokio::test]
+    async fn gguf_array_head_count_kv_returns_max() {
+        // Simulate Gemma 4: per-layer kv head counts as an i32 array
+        // Mix of values — should return the max (8)
+        let arr = gguf_array_i32(&[4, 8, 4, 8, 4, 8]);
+        let data = build_gguf(&[
+            ("gemma4.attention.head_count_kv", 9, arr),
+            ("gemma4.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.head_count_kv, Some(8));
+        assert_eq!(meta.head_count, Some(32));
+    }
+
+    #[tokio::test]
+    async fn gguf_array_head_count_kv_uniform() {
+        // All layers have same kv head count
+        let arr = gguf_array_i32(&[8, 8, 8, 8]);
+        let data = build_gguf(&[
+            ("llama.attention.head_count_kv", 9, arr),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.head_count_kv, Some(8));
+    }
+
+    #[tokio::test]
+    async fn gguf_explicit_key_value_lengths() {
+        let data = build_gguf(&[
+            ("gemma4.attention.key_length", 4, 512u32.to_le_bytes().to_vec()),
+            ("gemma4.attention.value_length", 4, 512u32.to_le_bytes().to_vec()),
+            ("gemma4.embedding_length", 4, 3584u32.to_le_bytes().to_vec()),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.key_length, Some(512));
+        assert_eq!(meta.value_length, Some(512));
+        assert_eq!(meta.embedding_length, Some(3584));
+    }
+
+    #[tokio::test]
+    async fn gguf_no_key_value_lengths_stays_none() {
+        // Standard model without explicit key/value lengths
+        let data = build_gguf(&[
+            ("llama.embedding_length", 4, 4096u32.to_le_bytes().to_vec()),
+            ("llama.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
+            ("llama.attention.head_count_kv", 5, 8i32.to_le_bytes().to_vec()),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.key_length, None);
+        assert_eq!(meta.value_length, None);
     }
 }

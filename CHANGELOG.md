@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-04-07
+
+### Fixed
+- GGUF reader now handles array-valued `attention.head_count_kv` (per-layer KV head counts) by taking the max across layers — fixes NULL metadata for heterogeneous-attention models like Gemma 4
+- GGUF reader extracts `attention.key_length` and `attention.value_length` when present, stored in new DB columns
+- VRAM estimator uses explicit key/value dimensions for KV cache calculation instead of deriving `head_dim = embedding_length / n_heads` — fixes significant undercount on models where these differ (e.g. Gemma 4)
+- KV cache formula extracted into testable function with 10 new unit tests covering both parser and estimator
+
 ## [1.4.1] - 2026-04-07
 
 ### Fixed
