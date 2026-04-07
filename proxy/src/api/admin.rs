@@ -865,7 +865,7 @@ async fn estimate_vram(
     // Model weights: GGUF file size ≈ GPU memory for quantized models
     let model_weights_mb = (size_bytes as u64) / (1024 * 1024);
 
-    let kv_cache_mb = estimate_kv_cache_mb(
+    let kv_cache_mb = estimate_kv_cache_mb(&KvCacheParams {
         n_layers,
         n_heads,
         n_kv_heads,
@@ -874,7 +874,7 @@ async fn estimate_vram(
         value_length,
         context_size,
         parallel,
-    );
+    });
 
     let overhead_mb: u64 = 200; // CUDA context + misc overhead
     let total_mb = model_weights_mb + kv_cache_mb + overhead_mb;
@@ -1130,12 +1130,8 @@ async fn admin_usage_timeline(
 // KV cache estimation (extracted for testability)
 // ---------------------------------------------------------------------------
 
-/// Estimate KV cache size in MB.
-///
-/// Uses explicit `key_length` / `value_length` when available (needed for models
-/// like Gemma 4 where these differ from `embedding_length / n_heads`).
-/// Falls back to derived `head_dim = embedding_length / n_heads`.
-fn estimate_kv_cache_mb(
+/// Parameters for KV cache estimation.
+struct KvCacheParams {
     n_layers: Option<i64>,
     n_heads: Option<i64>,
     n_kv_heads: Option<i64>,
@@ -1144,17 +1140,24 @@ fn estimate_kv_cache_mb(
     value_length: Option<i64>,
     context_size: u64,
     parallel: u64,
-) -> u64 {
-    match (n_layers, n_heads, n_kv_heads, embedding_length) {
+}
+
+/// Estimate KV cache size in MB.
+///
+/// Uses explicit `key_length` / `value_length` when available (needed for models
+/// like Gemma 4 where these differ from `embedding_length / n_heads`).
+/// Falls back to derived `head_dim = embedding_length / n_heads`.
+fn estimate_kv_cache_mb(p: &KvCacheParams) -> u64 {
+    match (p.n_layers, p.n_heads, p.n_kv_heads, p.embedding_length) {
         (Some(layers), Some(heads), Some(kv_heads), Some(emb_len)) if heads > 0 => {
             let derived_head_dim = emb_len as u64 / heads as u64;
-            let key_dim = key_length.map(|k| k as u64).unwrap_or(derived_head_dim);
-            let val_dim = value_length.map(|v| v as u64).unwrap_or(derived_head_dim);
+            let key_dim = p.key_length.map(|k| k as u64).unwrap_or(derived_head_dim);
+            let val_dim = p.value_length.map(|v| v as u64).unwrap_or(derived_head_dim);
             let kv_bytes = (layers as u64)
                 * (kv_heads as u64)
                 * (key_dim + val_dim)
-                * context_size
-                * parallel
+                * p.context_size
+                * p.parallel
                 * 2; // fp16
             kv_bytes / (1024 * 1024)
         }
@@ -1168,23 +1171,40 @@ mod tests {
 
     // -- estimate_kv_cache_mb -------------------------------------------------
 
+    /// Helper to build KvCacheParams with common defaults.
+    fn kv_params(
+        n_layers: Option<i64>,
+        n_heads: Option<i64>,
+        n_kv_heads: Option<i64>,
+        embedding_length: Option<i64>,
+        key_length: Option<i64>,
+        value_length: Option<i64>,
+        context_size: u64,
+        parallel: u64,
+    ) -> KvCacheParams {
+        KvCacheParams {
+            n_layers,
+            n_heads,
+            n_kv_heads,
+            embedding_length,
+            key_length,
+            value_length,
+            context_size,
+            parallel,
+        }
+    }
+
     #[test]
     fn kv_cache_returns_zero_when_metadata_missing() {
         // n_kv_heads = None → can't estimate
-        assert_eq!(
-            estimate_kv_cache_mb(Some(32), Some(32), None, Some(4096), None, None, 2048, 1),
-            0
-        );
+        let p = kv_params(Some(32), Some(32), None, Some(4096), None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 0);
         // n_layers = None
-        assert_eq!(
-            estimate_kv_cache_mb(None, Some(32), Some(8), Some(4096), None, None, 2048, 1),
-            0
-        );
+        let p = kv_params(None, Some(32), Some(8), Some(4096), None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 0);
         // all None
-        assert_eq!(
-            estimate_kv_cache_mb(None, None, None, None, None, None, 2048, 1),
-            0
-        );
+        let p = kv_params(None, None, None, None, None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 0);
     }
 
     #[test]
@@ -1193,17 +1213,8 @@ mod tests {
         // head_dim = 4096/32 = 128, key_dim=val_dim=128
         // kv_bytes = 32 * 8 * (128+128) * 2048 * 1 * 2 = 268_435_456
         // kv_mb = 268_435_456 / 1_048_576 = 256
-        let mb = estimate_kv_cache_mb(
-            Some(32),
-            Some(32),
-            Some(8),
-            Some(4096),
-            None, // no explicit key_length
-            None, // no explicit value_length
-            2048,
-            1,
-        );
-        assert_eq!(mb, 256);
+        let p = kv_params(Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 256);
     }
 
     #[test]
@@ -1212,52 +1223,41 @@ mod tests {
         // Explicit key_length=512, value_length=512
         // derived head_dim would be 3584/32=112 (WRONG for Gemma 4)
         // With explicit dims: kv_bytes = 34 * 8 * (512+512) * 8192 * 1 * 2
-        let mb = estimate_kv_cache_mb(
+        let p = kv_params(
             Some(34),
             Some(32),
             Some(8),
             Some(3584),
-            Some(512),  // explicit key_length
-            Some(512),  // explicit value_length
+            Some(512),
+            Some(512),
             8192,
             1,
         );
         // 34 * 8 * 1024 * 8192 * 2 = 4_563_402_752 bytes = 4352 MB
-        assert_eq!(mb, 4352);
+        assert_eq!(estimate_kv_cache_mb(&p), 4352);
 
         // Verify this differs from the (wrong) derived path
-        let mb_derived = estimate_kv_cache_mb(
-            Some(34),
-            Some(32),
-            Some(8),
-            Some(3584),
-            None, // fallback to derived
-            None,
-            8192,
-            1,
-        );
+        let p_derived = kv_params(Some(34), Some(32), Some(8), Some(3584), None, None, 8192, 1);
         // 34 * 8 * (112+112) * 8192 * 2 = 998_244_352 bytes = 952 MB (undercounts!)
+        let mb_derived = estimate_kv_cache_mb(&p_derived);
         assert_eq!(mb_derived, 952);
-        assert!(mb > mb_derived, "Explicit dims should give larger (correct) estimate");
+        assert!(
+            estimate_kv_cache_mb(&p) > mb_derived,
+            "Explicit dims should give larger (correct) estimate"
+        );
     }
 
     #[test]
     fn kv_cache_parallel_slots_multiply() {
-        let mb_1 = estimate_kv_cache_mb(
-            Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 1,
-        );
-        let mb_4 = estimate_kv_cache_mb(
-            Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 4,
-        );
-        assert_eq!(mb_4, mb_1 * 4);
+        let p1 = kv_params(Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 1);
+        let p4 = kv_params(Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 4);
+        assert_eq!(estimate_kv_cache_mb(&p4), estimate_kv_cache_mb(&p1) * 4);
     }
 
     #[test]
     fn kv_cache_zero_heads_returns_zero() {
         // heads = 0 should not panic (division by zero guard)
-        assert_eq!(
-            estimate_kv_cache_mb(Some(32), Some(0), Some(8), Some(4096), None, None, 2048, 1),
-            0
-        );
+        let p = kv_params(Some(32), Some(0), Some(8), Some(4096), None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 0);
     }
 }

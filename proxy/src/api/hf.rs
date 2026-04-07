@@ -1714,10 +1714,7 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "gguf_test_{}_{id}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("gguf_test_{}_{id}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.gguf");
         std::fs::write(&path, data).unwrap();
@@ -1729,10 +1726,18 @@ mod tests {
     #[tokio::test]
     async fn gguf_scalar_head_count_kv() {
         let data = build_gguf(&[
-            ("llama.block_count", 4, 32u32.to_le_bytes().to_vec()),       // u32
+            ("llama.block_count", 4, 32u32.to_le_bytes().to_vec()), // u32
             ("llama.embedding_length", 4, 4096u32.to_le_bytes().to_vec()),
-            ("llama.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
-            ("llama.attention.head_count_kv", 5, 8i32.to_le_bytes().to_vec()), // i32
+            (
+                "llama.attention.head_count",
+                4,
+                32u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "llama.attention.head_count_kv",
+                5,
+                8i32.to_le_bytes().to_vec(),
+            ), // i32
             ("llama.context_length", 4, 2048u32.to_le_bytes().to_vec()),
         ]);
         let meta = parse_gguf_bytes(&data).await;
@@ -1752,7 +1757,11 @@ mod tests {
         let arr = gguf_array_i32(&[4, 8, 4, 8, 4, 8]);
         let data = build_gguf(&[
             ("gemma4.attention.head_count_kv", 9, arr),
-            ("gemma4.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
+            (
+                "gemma4.attention.head_count",
+                4,
+                32u32.to_le_bytes().to_vec(),
+            ),
         ]);
         let meta = parse_gguf_bytes(&data).await;
         assert_eq!(meta.head_count_kv, Some(8));
@@ -1763,9 +1772,7 @@ mod tests {
     async fn gguf_array_head_count_kv_uniform() {
         // All layers have same kv head count
         let arr = gguf_array_i32(&[8, 8, 8, 8]);
-        let data = build_gguf(&[
-            ("llama.attention.head_count_kv", 9, arr),
-        ]);
+        let data = build_gguf(&[("llama.attention.head_count_kv", 9, arr)]);
         let meta = parse_gguf_bytes(&data).await;
         assert_eq!(meta.head_count_kv, Some(8));
     }
@@ -1773,8 +1780,16 @@ mod tests {
     #[tokio::test]
     async fn gguf_explicit_key_value_lengths() {
         let data = build_gguf(&[
-            ("gemma4.attention.key_length", 4, 512u32.to_le_bytes().to_vec()),
-            ("gemma4.attention.value_length", 4, 512u32.to_le_bytes().to_vec()),
+            (
+                "gemma4.attention.key_length",
+                4,
+                512u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "gemma4.attention.value_length",
+                4,
+                512u32.to_le_bytes().to_vec(),
+            ),
             ("gemma4.embedding_length", 4, 3584u32.to_le_bytes().to_vec()),
         ]);
         let meta = parse_gguf_bytes(&data).await;
@@ -1788,8 +1803,16 @@ mod tests {
         // Standard model without explicit key/value lengths
         let data = build_gguf(&[
             ("llama.embedding_length", 4, 4096u32.to_le_bytes().to_vec()),
-            ("llama.attention.head_count", 4, 32u32.to_le_bytes().to_vec()),
-            ("llama.attention.head_count_kv", 5, 8i32.to_le_bytes().to_vec()),
+            (
+                "llama.attention.head_count",
+                4,
+                32u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "llama.attention.head_count_kv",
+                5,
+                8i32.to_le_bytes().to_vec(),
+            ),
         ]);
         let meta = parse_gguf_bytes(&data).await;
         assert_eq!(meta.key_length, None);
