@@ -1461,10 +1461,15 @@ mod tests {
     use super::*;
 
     // -- hf_http_error_hint --------------------------------------------------
+    // These tests mutate HF_TOKEN env var, so they must be serialized to avoid
+    // races when cargo runs tests in parallel.
+
+    use std::sync::Mutex;
+    static HF_TOKEN_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn hf_http_error_hint_unauthorized_without_token() {
-        // Ensure HF_TOKEN is unset for this test
+        let _guard = HF_TOKEN_LOCK.lock().unwrap();
         std::env::remove_var("HF_TOKEN");
         let hint = hf_http_error_hint(reqwest::StatusCode::UNAUTHORIZED);
         assert!(
@@ -1475,6 +1480,7 @@ mod tests {
 
     #[test]
     fn hf_http_error_hint_forbidden_without_token() {
+        let _guard = HF_TOKEN_LOCK.lock().unwrap();
         std::env::remove_var("HF_TOKEN");
         let hint = hf_http_error_hint(reqwest::StatusCode::FORBIDDEN);
         assert!(
@@ -1485,6 +1491,7 @@ mod tests {
 
     #[test]
     fn hf_http_error_hint_unauthorized_with_token() {
+        let _guard = HF_TOKEN_LOCK.lock().unwrap();
         std::env::set_var("HF_TOKEN", "hf_test_token");
         let hint = hf_http_error_hint(reqwest::StatusCode::UNAUTHORIZED);
         assert!(
@@ -1496,6 +1503,7 @@ mod tests {
 
     #[test]
     fn hf_http_error_hint_forbidden_with_token() {
+        let _guard = HF_TOKEN_LOCK.lock().unwrap();
         std::env::set_var("HF_TOKEN", "hf_test_token");
         let hint = hf_http_error_hint(reqwest::StatusCode::FORBIDDEN);
         assert!(
