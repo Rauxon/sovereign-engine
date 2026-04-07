@@ -309,6 +309,16 @@ describe('searchHfModels()', () => {
     expect(calledUrl).not.toContain('offset=');
     expect(calledUrl).not.toContain('limit=');
   });
+
+  it('omits task param when set to "any"', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ models: [], has_more: false }));
+
+    await searchHfModels('gemma', 'any');
+
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain('q=gemma');
+    expect(calledUrl).not.toContain('task=');
+  });
 });
 
 // ==========================================================================

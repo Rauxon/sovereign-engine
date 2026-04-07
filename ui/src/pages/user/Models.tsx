@@ -17,6 +17,7 @@ import ErrorAlert from '../../components/common/ErrorAlert';
 const POLL_INTERVAL_MS = 3000;
 
 const TASK_OPTIONS = [
+  'any',
   'text-generation',
   'text2text-generation',
   'summarization',
@@ -88,7 +89,7 @@ function HfSearch({
   colors: ThemeColors;
 }>) {
   const [query, setQuery] = useState('');
-  const [task, setTask] = useState('text-generation');
+  const [task, setTask] = useState('any');
   const ggufOnly = true;
   const [results, setResults] = useState<HfSearchResult[]>([]);
   const [searching, setSearching] = useState(false);

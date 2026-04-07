@@ -100,7 +100,7 @@ async fn search_models(
     Query(params): Query<SearchQuery>,
 ) -> impl IntoResponse {
     let mut query = params.q.unwrap_or_default();
-    let task = params.task.unwrap_or_else(|| "text-generation".to_string());
+    let task = params.task.unwrap_or_default();
     let offset = params.offset.unwrap_or(0);
     let limit = params.limit.unwrap_or(20).min(100);
 
@@ -117,11 +117,15 @@ async fn search_models(
     };
 
     let mut url = format!(
-        "https://huggingface.co/api/models?search={}&pipeline_tag={}&sort=downloads&direction=-1&limit={}",
+        "https://huggingface.co/api/models?search={}&sort=downloads&direction=-1&limit={}",
         urlencoded(&query),
-        urlencoded(&task),
         hf_limit,
     );
+
+    // Only filter by pipeline_tag if a specific task was requested (not empty / "any")
+    if !task.is_empty() && task != "any" {
+        url.push_str(&format!("&pipeline_tag={}", urlencoded(&task)));
+    }
 
     if let Some(ref tags) = params.tags {
         for tag in tags.split(',') {

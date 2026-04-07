@@ -161,7 +161,7 @@ export async function searchHfModels(
   limit?: number,
 ): Promise<{ models: HfSearchResult[]; has_more: boolean }> {
   const params = new URLSearchParams({ q: query });
-  if (task) params.set('task', task);
+  if (task && task !== 'any') params.set('task', task);
   if (tags) params.set('tags', tags);
   if (offset) params.set('offset', String(offset));
   if (limit) params.set('limit', String(limit));
