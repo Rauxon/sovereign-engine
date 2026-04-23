@@ -253,14 +253,20 @@ async fn backfill_gguf_metadata(db: &Database, config: &AppConfig) {
 
         match api::hf::read_gguf_metadata(&gguf_path).await {
             Ok(meta) => {
+                let (kv_bpt_global, kv_bpt_swa) = api::hf::compute_kv_aggregates(&meta);
                 if let Err(e) = sqlx::query(
-                    "UPDATE models SET context_length = COALESCE(context_length, ?), n_layers = ?, n_heads = ?, n_kv_heads = ?, embedding_length = ? WHERE id = ?",
+                    "UPDATE models SET context_length = COALESCE(context_length, ?), n_layers = ?, n_heads = ?, n_kv_heads = ?, embedding_length = ?, key_length = COALESCE(key_length, ?), value_length = COALESCE(value_length, ?), sliding_window = COALESCE(sliding_window, ?), kv_bytes_per_token_global = COALESCE(kv_bytes_per_token_global, ?), kv_bytes_per_token_swa = COALESCE(kv_bytes_per_token_swa, ?) WHERE id = ?",
                 )
                 .bind(meta.context_length.map(|v| v as i64))
                 .bind(meta.block_count.map(|v| v as i64))
                 .bind(meta.head_count.map(|v| v as i64))
                 .bind(meta.head_count_kv.map(|v| v as i64))
                 .bind(meta.embedding_length.map(|v| v as i64))
+                .bind(meta.key_length.map(|v| v as i64))
+                .bind(meta.value_length.map(|v| v as i64))
+                .bind(meta.sliding_window.map(|v| v as i64))
+                .bind(kv_bpt_global)
+                .bind(kv_bpt_swa)
                 .bind(model_id)
                 .execute(&db.pool)
                 .await

@@ -43,6 +43,9 @@ pub struct Model {
     pub embedding_length: Option<i64>,
     pub key_length: Option<i64>,
     pub value_length: Option<i64>,
+    pub sliding_window: Option<i64>,
+    pub kv_bytes_per_token_global: Option<i64>,
+    pub kv_bytes_per_token_swa: Option<i64>,
     /// Per-model llama-server CLI overrides. Stored as a JSON TEXT column
     /// (defaults to `{}` per migration). Serialized to the API as a nested
     /// object, not a string — see [`serialize_runtime_overrides`].
@@ -117,6 +120,9 @@ mod tests {
             embedding_length: None,
             key_length: None,
             value_length: None,
+            sliding_window: None,
+            kv_bytes_per_token_global: None,
+            kv_bytes_per_token_swa: None,
             runtime_overrides: runtime_overrides.into(),
         }
     }

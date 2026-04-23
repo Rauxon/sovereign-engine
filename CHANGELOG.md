@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-04-23
+
+### Fixed
+- VRAM estimation now correctly accounts for alternating global + sliding-window attention (Gemma 3 / Gemma 4). Previous formula assumed all layers used full context and the largest per-layer KV head count, leading to ~3× overestimates (e.g. Gemma 4 31B at 256K reported 120 GB KV cache vs ~20 GB actual) and incorrect "exceeds GPU" warnings that blocked model starts.
+
+### Added
+- GGUF reader now extracts `<arch>.attention.sliding_window_pattern` (per-layer bool array), `<arch>.attention.key_length_swa` / `value_length_swa`, and the full `<arch>.attention.head_count_kv` array (previously only the max was retained).
+- New DB columns on `models`: `sliding_window`, `kv_bytes_per_token_global`, `kv_bytes_per_token_swa` — pre-aggregated at ingestion from the per-layer metadata so the estimator is a simple `(global_bpt × context + swa_bpt × min(context, window)) × parallel`.
+- `backfill_gguf_metadata` (startup path) now populates the new columns plus `key_length` / `value_length` / `sliding_window` for already-ingested models that were missing them.
+- 13 new unit tests covering GGUF parsing of the new fields, aggregate computation (Gemma 4-style heterogeneous + homogeneous fallback paths), and the SWA-aware estimator branch.
+
 ## [1.5.1] - 2026-04-23
 
 ### Fixed

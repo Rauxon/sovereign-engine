@@ -28,6 +28,9 @@ struct ModelMetadataRow {
     embedding_length: Option<i64>,
     key_length: Option<i64>,
     value_length: Option<i64>,
+    sliding_window: Option<i64>,
+    kv_bytes_per_token_global: Option<i64>,
+    kv_bytes_per_token_swa: Option<i64>,
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -1000,7 +1003,7 @@ async fn estimate_vram(
     // Look up model metadata
     let model: Option<ModelMetadataRow> =
         match sqlx::query_as(
-            "SELECT size_bytes, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length FROM models WHERE id = ?",
+            "SELECT size_bytes, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length, sliding_window, kv_bytes_per_token_global, kv_bytes_per_token_swa FROM models WHERE id = ?",
         )
         .bind(&req.model_id)
         .fetch_optional(&state.db.pool)
@@ -1021,6 +1024,9 @@ async fn estimate_vram(
         embedding_length,
         key_length,
         value_length,
+        sliding_window,
+        kv_bytes_per_token_global,
+        kv_bytes_per_token_swa,
     } = match model {
         Some(m) => m,
         None => {
@@ -1054,6 +1060,9 @@ async fn estimate_vram(
         embedding_length,
         key_length,
         value_length,
+        kv_bytes_per_token_global,
+        kv_bytes_per_token_swa,
+        sliding_window,
         context_size,
         parallel,
     });
@@ -1320,16 +1329,63 @@ struct KvCacheParams {
     embedding_length: Option<i64>,
     key_length: Option<i64>,
     value_length: Option<i64>,
+    /// SWA-aware pre-aggregate: Σ over full-context layers of
+    /// `kv_heads_i × (key_len + val_len) × 2` bytes/token. When present, the
+    /// estimator uses the SWA-aware formula; otherwise it falls back to the
+    /// legacy derived-head-dim calculation.
+    kv_bytes_per_token_global: Option<i64>,
+    /// SWA-aware pre-aggregate: Σ over sliding-window layers of
+    /// `kv_heads_i × (key_len_swa + val_len_swa) × 2` bytes/token. Only the
+    /// first `sliding_window` tokens of context consume this per token.
+    kv_bytes_per_token_swa: Option<i64>,
+    /// Sliding-window size (from GGUF `<arch>.attention.sliding_window`). When
+    /// None but `kv_bytes_per_token_swa` is Some, the SWA layers still cap at
+    /// full context — conservative upper bound.
+    sliding_window: Option<i64>,
     context_size: u64,
     parallel: u64,
 }
 
 /// Estimate KV cache size in MB.
 ///
-/// Uses explicit `key_length` / `value_length` when available (needed for models
-/// like Gemma 4 where these differ from `embedding_length / n_heads`).
-/// Falls back to derived `head_dim = embedding_length / n_heads`.
+/// Two paths:
+///
+/// 1. **SWA-aware** (preferred): when
+///    `kv_bytes_per_token_global` is set — computed at ingestion from the
+///    per-layer `head_count_kv` array and `sliding_window_pattern`. The
+///    formula is
+///
+///    ```text
+///    kv_bytes = (global_bpt × context
+///              + swa_bpt     × min(context, sliding_window)) × parallel
+///    ```
+///
+///    This correctly accounts for models like Gemma 3/4 that interleave
+///    global and sliding-window layers with different head counts and dims.
+///
+/// 2. **Legacy derived** (fallback for models lacking the aggregates):
+///    uses explicit `key_length` / `value_length` when available (for
+///    models like Gemma where head_dim != embedding_length / n_heads),
+///    else derives `head_dim = embedding_length / n_heads`.
 fn estimate_kv_cache_mb(p: &KvCacheParams) -> u64 {
+    if let Some(global_bpt) = p.kv_bytes_per_token_global {
+        let global_bytes = (global_bpt as u64).saturating_mul(p.context_size);
+        let swa_bytes = match p.kv_bytes_per_token_swa {
+            Some(swa_bpt) => {
+                let swa_tokens = match p.sliding_window {
+                    Some(w) if (w as u64) < p.context_size => w as u64,
+                    _ => p.context_size,
+                };
+                (swa_bpt as u64).saturating_mul(swa_tokens)
+            }
+            None => 0,
+        };
+        let kv_bytes = global_bytes
+            .saturating_add(swa_bytes)
+            .saturating_mul(p.parallel);
+        return kv_bytes / (1024 * 1024);
+    }
+
     match (p.n_layers, p.n_heads, p.n_kv_heads, p.embedding_length) {
         (Some(layers), Some(heads), Some(kv_heads), Some(emb_len)) if heads > 0 => {
             let derived_head_dim = emb_len as u64 / heads as u64;
@@ -1353,7 +1409,8 @@ mod tests {
 
     // -- estimate_kv_cache_mb -------------------------------------------------
 
-    /// Helper to build KvCacheParams with common defaults.
+    /// Helper to build KvCacheParams with common defaults (legacy path:
+    /// no SWA aggregates).
     #[allow(clippy::too_many_arguments)]
     fn kv_params(
         n_layers: Option<i64>,
@@ -1372,6 +1429,33 @@ mod tests {
             embedding_length,
             key_length,
             value_length,
+            kv_bytes_per_token_global: None,
+            kv_bytes_per_token_swa: None,
+            sliding_window: None,
+            context_size,
+            parallel,
+        }
+    }
+
+    /// Helper to build KvCacheParams for the SWA-aware path. The legacy
+    /// fields are all `None` so the estimator exercises the aggregates path.
+    fn kv_params_swa(
+        kv_bytes_per_token_global: Option<i64>,
+        kv_bytes_per_token_swa: Option<i64>,
+        sliding_window: Option<i64>,
+        context_size: u64,
+        parallel: u64,
+    ) -> KvCacheParams {
+        KvCacheParams {
+            n_layers: None,
+            n_heads: None,
+            n_kv_heads: None,
+            embedding_length: None,
+            key_length: None,
+            value_length: None,
+            kv_bytes_per_token_global,
+            kv_bytes_per_token_swa,
+            sliding_window,
             context_size,
             parallel,
         }
@@ -1442,5 +1526,71 @@ mod tests {
         // heads = 0 should not panic (division by zero guard)
         let p = kv_params(Some(32), Some(0), Some(8), Some(4096), None, None, 2048, 1);
         assert_eq!(estimate_kv_cache_mb(&p), 0);
+    }
+
+    // -- SWA-aware estimator --------------------------------------------------
+
+    #[test]
+    fn kv_cache_swa_aware_gemma4() {
+        // Gemma 4 31B at 256K context. Per the problem statement:
+        //   10 global layers × 4 kv_heads × (512+512) × 2 = 81_920 bytes/token
+        //   50 SWA    layers × 16 kv_heads × (256+256) × 2 = 819_200 bytes/token
+        //   sliding_window = 1024, context = 262_144
+        //
+        //   kv_bytes = 81_920 * 262_144 + 819_200 * 1024
+        //            = 21_474_836_480 + 838_860_800
+        //            = 22_313_697_280
+        //            = 21_280 MB
+        let global_bpt: i64 = 10 * 4 * (512 + 512) * 2;
+        assert_eq!(global_bpt, 81_920);
+        let swa_bpt: i64 = 50 * 16 * (256 + 256) * 2;
+        assert_eq!(swa_bpt, 819_200);
+
+        let p = kv_params_swa(Some(global_bpt), Some(swa_bpt), Some(1024), 262_144, 1);
+        let mb = estimate_kv_cache_mb(&p);
+        // Allow ±1 MB for rounding noise (the spec calls for ≈21,280 MB).
+        assert!(mb.abs_diff(21_280) <= 1, "expected ~21280 MB, got {mb}");
+    }
+
+    #[test]
+    fn kv_cache_legacy_fallback_when_aggregates_null() {
+        // Model without SWA aggregates must fall through to the legacy path
+        // and match exactly what the pre-SWA estimator produced.
+        let p = kv_params(Some(32), Some(32), Some(8), Some(4096), None, None, 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 256);
+    }
+
+    #[test]
+    fn kv_cache_no_sliding_window_swa_uses_full_context() {
+        // If sliding_window is None but swa_bpt is Some, treat SWA layers
+        // as spanning the full context (conservative upper bound).
+        // 2 layers × 8 heads × (128+128) × 2 = 8_192 bytes/token per half,
+        // so with global_bpt = swa_bpt = 8_192 and context = 1024, parallel = 1:
+        //   kv_bytes = 8_192 * 1024 + 8_192 * 1024 = 16_777_216 bytes = 16 MB
+        let p = kv_params_swa(Some(8_192), Some(8_192), None, 1024, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 16);
+
+        // And it should match what you'd get if sliding_window >= context:
+        let p_large = kv_params_swa(Some(8_192), Some(8_192), Some(10_000), 1024, 1);
+        assert_eq!(estimate_kv_cache_mb(&p_large), 16);
+    }
+
+    #[test]
+    fn kv_cache_swa_aware_parallel_multiplies() {
+        // parallel slots multiply the final kv_bytes, same as legacy path.
+        let p1 = kv_params_swa(Some(81_920), Some(819_200), Some(1024), 262_144, 1);
+        let p4 = kv_params_swa(Some(81_920), Some(819_200), Some(1024), 262_144, 4);
+        assert_eq!(estimate_kv_cache_mb(&p4), estimate_kv_cache_mb(&p1) * 4);
+    }
+
+    #[test]
+    fn kv_cache_swa_aware_only_global_layers() {
+        // If swa_bpt is None (no SWA layers / homogeneous model wrapped into
+        // the aggregates path), the SWA term is zero and the answer equals
+        // global_bpt × context / (1024*1024).
+        // 4 layers × 8 heads × (128+128) × 2 = 16_384 bytes/token,
+        // context 2048 → 33_554_432 bytes → 32 MB.
+        let p = kv_params_swa(Some(16_384), None, Some(1024), 2048, 1);
+        assert_eq!(estimate_kv_cache_mb(&p), 32);
     }
 }

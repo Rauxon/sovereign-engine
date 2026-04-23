@@ -967,8 +967,9 @@ async fn run_download(
     let model_id = Uuid::new_v4().to_string();
     let size_bytes = total_downloaded as i64;
     let bt = backend_type.as_deref().unwrap_or("llamacpp");
+    let (kv_bpt_global, kv_bpt_swa) = compute_kv_aggregates(&gguf_meta);
     match sqlx::query(
-        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length, runtime_overrides) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length, sliding_window, kv_bytes_per_token_global, kv_bytes_per_token_swa, runtime_overrides) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&model_id)
     .bind(&hf_repo)
@@ -984,6 +985,9 @@ async fn run_download(
     .bind(gguf_meta.embedding_length.map(|v| v as i64))
     .bind(gguf_meta.key_length.map(|v| v as i64))
     .bind(gguf_meta.value_length.map(|v| v as i64))
+    .bind(gguf_meta.sliding_window.map(|v| v as i64))
+    .bind(kv_bpt_global)
+    .bind(kv_bpt_swa)
     .bind(runtime_overrides_json)
     .execute(&app_state.db.pool)
     .await
@@ -1226,12 +1230,76 @@ pub struct GgufMetadata {
     pub context_length: Option<u32>,
     pub block_count: Option<u32>, // n_layers
     pub embedding_length: Option<u32>,
-    pub head_count: Option<u32>,     // attention.head_count
-    pub head_count_kv: Option<u32>,  // attention.head_count_kv
-    pub key_length: Option<u32>,     // attention.key_length
-    pub value_length: Option<u32>,   // attention.value_length
-    pub sliding_window: Option<u32>, // <arch>.attention.sliding_window
-    pub expert_count: Option<u32>,   // <arch>.expert_count
+    pub head_count: Option<u32>,       // attention.head_count
+    pub head_count_kv: Option<u32>,    // attention.head_count_kv (max, for fallback estimator)
+    pub key_length: Option<u32>,       // attention.key_length (global layers)
+    pub value_length: Option<u32>,     // attention.value_length (global layers)
+    pub key_length_swa: Option<u32>,   // attention.key_length_swa (sliding-window layers)
+    pub value_length_swa: Option<u32>, // attention.value_length_swa (sliding-window layers)
+    pub sliding_window: Option<u32>,   // <arch>.attention.sliding_window
+    pub expert_count: Option<u32>,     // <arch>.expert_count
+    /// Full per-layer kv-head array (Gemma 3/4 style heterogeneous attention).
+    /// When present, this lives alongside `head_count_kv` (which is the max).
+    pub head_count_kv_per_layer: Option<Vec<u32>>,
+    /// Per-layer SWA flags: `true` = sliding-window attention layer,
+    /// `false` = full-context (global) layer. Gemma 3/4 uses the key
+    /// `<arch>.attention.sliding_window_pattern` (GGUF type 9 array of bool).
+    pub sliding_window_pattern: Option<Vec<bool>>,
+}
+
+/// Pre-compute per-token KV-cache bytes, split between global (full-context)
+/// and SWA (sliding-window) layers. See migration
+/// `20260423000001_swa_kv_aggregates.sql` for the formula and rationale.
+///
+/// Returns `(global_bytes_per_token, swa_bytes_per_token)`.
+///
+/// * When the GGUF has per-layer `head_count_kv` **and** a
+///   `sliding_window_pattern` of the same length, the layers are partitioned
+///   and each contributes `kv_heads_i × (key_len + val_len) × 2` bytes/token
+///   (using the `_swa` dims for SWA layers when present).
+/// * Otherwise, every layer is treated as global, and we fall back to
+///   `n_layers × max(head_count_kv) × (key_len + val_len) × 2`. This matches
+///   the pre-SWA estimator exactly for legacy models.
+/// * If we can't determine `key_length` / `value_length` or `block_count`,
+///   we return `(None, None)` and leave the DB columns NULL — the estimator
+///   takes its legacy path.
+pub fn compute_kv_aggregates(meta: &GgufMetadata) -> (Option<i64>, Option<i64>) {
+    let Some(key_len) = meta.key_length else {
+        return (None, None);
+    };
+    let Some(val_len) = meta.value_length else {
+        return (None, None);
+    };
+    let key_len_swa = meta.key_length_swa.unwrap_or(key_len);
+    let val_len_swa = meta.value_length_swa.unwrap_or(val_len);
+
+    // Heterogeneous path: per-layer head counts + sliding-window pattern.
+    if let (Some(heads), Some(pat)) = (
+        meta.head_count_kv_per_layer.as_ref(),
+        meta.sliding_window_pattern.as_ref(),
+    ) {
+        if heads.len() == pat.len() && !heads.is_empty() {
+            let mut global_bytes: i64 = 0;
+            let mut swa_bytes: i64 = 0;
+            for (i, &h) in heads.iter().enumerate() {
+                let is_swa = pat[i];
+                if is_swa {
+                    swa_bytes += (h as i64) * ((key_len_swa + val_len_swa) as i64) * 2;
+                } else {
+                    global_bytes += (h as i64) * ((key_len + val_len) as i64) * 2;
+                }
+            }
+            return (Some(global_bytes), Some(swa_bytes));
+        }
+    }
+
+    // Homogeneous / missing pattern: treat every layer as global, using the
+    // max head_count_kv × n_layers — identical to the legacy estimator.
+    let (Some(n_layers), Some(kv_heads)) = (meta.block_count, meta.head_count_kv) else {
+        return (None, None);
+    };
+    let per_token = (n_layers as i64) * (kv_heads as i64) * ((key_len + val_len) as i64) * 2;
+    (Some(per_token), None)
 }
 
 /// Decide the initial `runtime_overrides` JSON value based on GGUF metadata.
@@ -1339,13 +1407,15 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
     }
 
     // Helper: read an integer value, handling both scalars and arrays (type 9).
-    // For arrays of integers, returns the max element (conservative for VRAM estimation).
-    // For scalar integers, behaves like read_int_value.
-    // Returns None for non-integer types.
-    async fn read_int_or_max_array(
+    // For arrays of integers, returns (max_element, full_array). The max is
+    // what the legacy single-column estimator uses; the full array is what
+    // the SWA-aware estimator needs (per-layer kv-head counts).
+    // For scalar integers, returns (Some(value), None).
+    // Returns (None, None) for non-integer types.
+    async fn read_int_scalar_or_array(
         f: &mut tokio::fs::File,
         vtype: u32,
-    ) -> Result<Option<u32>, String> {
+    ) -> Result<(Option<u32>, Option<Vec<u32>>), String> {
         if vtype == 9 {
             // Array: element type (u32) + count (u64) + elements
             let mut tb = [0u8; 4];
@@ -1355,19 +1425,61 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
             f.read_exact(&mut cb).await.map_err(|e| e.to_string())?;
             let count = u64::from_le_bytes(cb);
 
+            let mut values: Vec<u32> = Vec::with_capacity(count.min(4096) as usize);
             let mut max_val: Option<u32> = None;
+            let mut all_integer = true;
             for _ in 0..count {
                 if let Some(v) = read_int_value(f, atype).await? {
                     max_val = Some(max_val.map_or(v, |cur| cur.max(v)));
+                    values.push(v);
                 } else {
-                    // Array of non-integer type — skip remaining and return None
+                    // Array of non-integer type — skip remaining and bail out
                     Box::pin(skip_value(f, atype)).await?;
+                    all_integer = false;
                 }
             }
-            Ok(max_val)
+            if all_integer {
+                Ok((max_val, Some(values)))
+            } else {
+                Ok((max_val, None))
+            }
         } else {
-            read_int_value(f, vtype).await
+            Ok((read_int_value(f, vtype).await?, None))
         }
+    }
+
+    // Helper: read a GGUF type-9 array of bools (element type 7, 1 byte each;
+    // 0 = false, anything else = true). Returns None if the value is not a
+    // bool array (caller should skip_value separately in that case).
+    async fn read_bool_array(
+        f: &mut tokio::fs::File,
+        vtype: u32,
+    ) -> Result<Option<Vec<bool>>, String> {
+        if vtype != 9 {
+            return Ok(None);
+        }
+        let mut tb = [0u8; 4];
+        f.read_exact(&mut tb).await.map_err(|e| e.to_string())?;
+        let atype = u32::from_le_bytes(tb);
+        let mut cb = [0u8; 8];
+        f.read_exact(&mut cb).await.map_err(|e| e.to_string())?;
+        let count = u64::from_le_bytes(cb);
+
+        if atype != 7 {
+            // Not a bool array — skip the remaining elements and signal "not bools"
+            for _ in 0..count {
+                Box::pin(skip_value(f, atype)).await?;
+            }
+            return Ok(None);
+        }
+
+        let mut values: Vec<bool> = Vec::with_capacity(count.min(4096) as usize);
+        for _ in 0..count {
+            let mut b = [0u8; 1];
+            f.read_exact(&mut b).await.map_err(|e| e.to_string())?;
+            values.push(b[0] != 0);
+        }
+        Ok(Some(values))
     }
 
     // Helper: skip a GGUF value by type tag
@@ -1411,7 +1523,10 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
 
     let mut meta = GgufMetadata::default();
 
-    // Keys we're looking for (all suffixed with arch prefix, e.g. "llama.context_length")
+    // Keys we're looking for (all suffixed with arch prefix, e.g. "llama.context_length").
+    // Order matters for ends_with matching: longer/more-specific suffixes must be
+    // checked before their shorter prefixes (e.g. KEY_LENGTH_SWA before KEY_LENGTH,
+    // SLIDING_WINDOW_PATTERN before SLIDING_WINDOW).
     const CONTEXT_LENGTH: &str = ".context_length";
     const BLOCK_COUNT: &str = ".block_count";
     const EMBEDDING_LENGTH: &str = ".embedding_length";
@@ -1419,7 +1534,10 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
     const HEAD_COUNT_KV: &str = ".attention.head_count_kv";
     const KEY_LENGTH: &str = ".attention.key_length";
     const VALUE_LENGTH: &str = ".attention.value_length";
+    const KEY_LENGTH_SWA: &str = ".attention.key_length_swa";
+    const VALUE_LENGTH_SWA: &str = ".attention.value_length_swa";
     const SLIDING_WINDOW: &str = ".attention.sliding_window";
+    const SLIDING_WINDOW_PATTERN: &str = ".attention.sliding_window_pattern";
     const EXPERT_COUNT: &str = ".expert_count";
 
     for _ in 0..n_kv {
@@ -1431,12 +1549,34 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
         let vtype = u32::from_le_bytes(tb);
 
         // head_count_kv may be an array (per-layer) in heterogeneous-attention
-        // models like Gemma 4 — handle it separately with read_int_or_max_array.
+        // models like Gemma 4 — capture BOTH the max (for legacy estimator)
+        // AND the full array (for SWA-aware estimator).
         if key.ends_with(HEAD_COUNT_KV) {
-            if let Some(val) = read_int_or_max_array(&mut f, vtype).await? {
-                meta.head_count_kv = Some(val);
-            } else {
+            let (max_val, arr) = read_int_scalar_or_array(&mut f, vtype).await?;
+            if let Some(v) = max_val {
+                meta.head_count_kv = Some(v);
+            } else if arr.is_none() {
+                // read_int_scalar_or_array didn't consume a value for non-int
+                // scalar types — skip explicitly.
                 skip_value(&mut f, vtype).await?;
+            }
+            if let Some(a) = arr {
+                meta.head_count_kv_per_layer = Some(a);
+            }
+            continue;
+        }
+
+        // sliding_window_pattern is a bool array (GGUF type 9, element type 7).
+        if key.ends_with(SLIDING_WINDOW_PATTERN) {
+            match read_bool_array(&mut f, vtype).await? {
+                Some(pat) => meta.sliding_window_pattern = Some(pat),
+                None => {
+                    // Not a bool array (or not an array at all). read_bool_array
+                    // consumes arrays; for non-array types we still need to skip.
+                    if vtype != 9 {
+                        skip_value(&mut f, vtype).await?;
+                    }
+                }
             }
             continue;
         }
@@ -1449,6 +1589,10 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
             Some(&mut meta.embedding_length)
         } else if key.ends_with(HEAD_COUNT) {
             Some(&mut meta.head_count)
+        } else if key.ends_with(KEY_LENGTH_SWA) {
+            Some(&mut meta.key_length_swa)
+        } else if key.ends_with(VALUE_LENGTH_SWA) {
+            Some(&mut meta.value_length_swa)
         } else if key.ends_with(KEY_LENGTH) {
             Some(&mut meta.key_length)
         } else if key.ends_with(VALUE_LENGTH) {
@@ -1753,6 +1897,17 @@ mod tests {
         buf
     }
 
+    /// Encode a GGUF bool array (element type 7, 1 byte each).
+    fn gguf_array_bool(values: &[bool]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&7u32.to_le_bytes()); // element type = bool
+        buf.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for &v in values {
+            buf.push(if v { 1u8 } else { 0u8 });
+        }
+        buf
+    }
+
     async fn parse_gguf_bytes(data: &[u8]) -> GgufMetadata {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1900,6 +2055,168 @@ mod tests {
         let meta = parse_gguf_bytes(&data).await;
         assert_eq!(meta.sliding_window, None);
         assert_eq!(meta.expert_count, None);
+    }
+
+    // -- SWA-aware metadata parsing ------------------------------------------
+
+    #[tokio::test]
+    async fn gguf_sliding_window_pattern_parsed() {
+        // Gemma 4-style: first 5 layers SWA (True), last layer global (False).
+        let pat = gguf_array_bool(&[true, true, true, true, true, false]);
+        let data = build_gguf(&[("gemma4.attention.sliding_window_pattern", 9, pat)]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(
+            meta.sliding_window_pattern,
+            Some(vec![true, true, true, true, true, false])
+        );
+    }
+
+    #[tokio::test]
+    async fn gguf_head_count_kv_per_layer_parsed() {
+        // Per-layer kv-head array should populate BOTH the max scalar field
+        // (for the legacy estimator) and the full per-layer vector (for SWA).
+        let arr = gguf_array_i32(&[16, 16, 16, 16, 16, 4]);
+        let data = build_gguf(&[("gemma4.attention.head_count_kv", 9, arr)]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.head_count_kv, Some(16));
+        assert_eq!(
+            meta.head_count_kv_per_layer,
+            Some(vec![16, 16, 16, 16, 16, 4])
+        );
+    }
+
+    #[tokio::test]
+    async fn gguf_key_length_swa_parsed() {
+        // Gemma 4 has distinct global and SWA kv-dim sizes.
+        let data = build_gguf(&[
+            (
+                "gemma4.attention.key_length",
+                4,
+                512u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "gemma4.attention.value_length",
+                4,
+                512u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "gemma4.attention.key_length_swa",
+                4,
+                256u32.to_le_bytes().to_vec(),
+            ),
+            (
+                "gemma4.attention.value_length_swa",
+                4,
+                256u32.to_le_bytes().to_vec(),
+            ),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.key_length, Some(512));
+        assert_eq!(meta.value_length, Some(512));
+        assert_eq!(meta.key_length_swa, Some(256));
+        assert_eq!(meta.value_length_swa, Some(256));
+    }
+
+    // -- compute_kv_aggregates -----------------------------------------------
+
+    #[test]
+    fn compute_kv_aggregates_gemma4_style() {
+        // 6 layers: [16, 16, 16, 16, 16, 4] kv-heads.
+        // Pattern:   [T,  T,  T,  T,  T,  F] (True = SWA).
+        // key_len = val_len = 512 (global); _swa = 256.
+        //   global term (layer 5): 4 × (512 + 512) × 2 = 8_192
+        //   swa    term (5 layers × 16): 5 × 16 × (256 + 256) × 2 = 81_920
+        let meta = GgufMetadata {
+            block_count: Some(6),
+            head_count_kv: Some(16),
+            head_count_kv_per_layer: Some(vec![16, 16, 16, 16, 16, 4]),
+            sliding_window_pattern: Some(vec![true, true, true, true, true, false]),
+            key_length: Some(512),
+            value_length: Some(512),
+            key_length_swa: Some(256),
+            value_length_swa: Some(256),
+            ..Default::default()
+        };
+        let (global_bpt, swa_bpt) = compute_kv_aggregates(&meta);
+        assert_eq!(global_bpt, Some(8_192));
+        assert_eq!(swa_bpt, Some(81_920));
+    }
+
+    #[test]
+    fn compute_kv_aggregates_homogeneous() {
+        // No per-layer arrays and no SWA pattern — every layer is treated
+        // as global using max(head_count_kv) × n_layers.
+        //   32 layers × 8 kv_heads × (128 + 128) × 2 = 131_072 bytes/token
+        let meta = GgufMetadata {
+            block_count: Some(32),
+            head_count_kv: Some(8),
+            key_length: Some(128),
+            value_length: Some(128),
+            ..Default::default()
+        };
+        let (global_bpt, swa_bpt) = compute_kv_aggregates(&meta);
+        assert_eq!(global_bpt, Some(131_072));
+        assert_eq!(swa_bpt, None);
+    }
+
+    #[test]
+    fn compute_kv_aggregates_missing_metadata() {
+        // No key/value length → no aggregates at all.
+        let meta = GgufMetadata {
+            block_count: Some(32),
+            head_count_kv: Some(8),
+            ..Default::default()
+        };
+        assert_eq!(compute_kv_aggregates(&meta), (None, None));
+
+        // Has key_length but no block_count / no per-layer info → no aggregates.
+        let meta = GgufMetadata {
+            key_length: Some(128),
+            value_length: Some(128),
+            ..Default::default()
+        };
+        assert_eq!(compute_kv_aggregates(&meta), (None, None));
+    }
+
+    #[test]
+    fn compute_kv_aggregates_swa_dims_fallback_to_global() {
+        // Per-layer + pattern present, but no _swa dims → SWA layers reuse
+        // the global key/value lengths.
+        //   Pattern = [T, F], heads = [4, 4], key = val = 100.
+        //   global_bpt = 4 × (100+100) × 2 = 1_600
+        //   swa_bpt    = 4 × (100+100) × 2 = 1_600  (fallback)
+        let meta = GgufMetadata {
+            block_count: Some(2),
+            head_count_kv: Some(4),
+            head_count_kv_per_layer: Some(vec![4, 4]),
+            sliding_window_pattern: Some(vec![true, false]),
+            key_length: Some(100),
+            value_length: Some(100),
+            ..Default::default()
+        };
+        let (global_bpt, swa_bpt) = compute_kv_aggregates(&meta);
+        assert_eq!(global_bpt, Some(1_600));
+        assert_eq!(swa_bpt, Some(1_600));
+    }
+
+    #[test]
+    fn compute_kv_aggregates_pattern_length_mismatch_falls_back() {
+        // If the per-layer array and the pattern disagree on length, we
+        // conservatively treat the whole model as homogeneous/global rather
+        // than guessing the alignment.
+        let meta = GgufMetadata {
+            block_count: Some(6),
+            head_count_kv: Some(16),
+            head_count_kv_per_layer: Some(vec![16, 16, 16, 16, 16, 4]),
+            sliding_window_pattern: Some(vec![true, false]), // wrong length
+            key_length: Some(128),
+            value_length: Some(128),
+            ..Default::default()
+        };
+        let (global_bpt, swa_bpt) = compute_kv_aggregates(&meta);
+        // 6 × 16 × (128+128) × 2 = 49_152
+        assert_eq!(global_bpt, Some(49_152));
+        assert_eq!(swa_bpt, None);
     }
 
     // -- auto_runtime_overrides ----------------------------------------------
