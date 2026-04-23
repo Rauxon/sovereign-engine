@@ -220,7 +220,6 @@ pub async fn start_container_core(
                 extra_args: overrides.to_cli_args(),
                 uid,
                 api_key: api_key.clone(),
-                ..Default::default()
             };
             state.docker.start_llamacpp(&llamacpp_config).await
         }
