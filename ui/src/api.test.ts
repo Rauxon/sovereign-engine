@@ -23,6 +23,7 @@ import {
   updateCategory,
   deleteCategory,
   getAdminModels,
+  updateModel,
   deleteModel,
   getAdminUsers,
   updateUser,
@@ -194,7 +195,7 @@ describe('getUserTokens()', () => {
 
 describe('getUserModels()', () => {
   it('unwraps the models array from /api/user/models', async () => {
-    const models = [{ id: 'm1', hf_repo: 'repo', filename: null, size_bytes: 100, category_id: null, loaded: false, backend_port: null, backend_type: 'vllm', last_used_at: null, created_at: '2025-01-01', context_length: null, n_layers: null, n_heads: null, n_kv_heads: null, embedding_length: null }];
+    const models = [{ id: 'm1', hf_repo: 'repo', filename: null, size_bytes: 100, category_id: null, loaded: false, backend_port: null, backend_type: 'vllm', last_used_at: null, created_at: '2025-01-01', context_length: null, n_layers: null, n_heads: null, n_kv_heads: null, embedding_length: null, runtime_overrides: null }];
     mockFetch.mockResolvedValueOnce(okResponse({ models }));
 
     const result = await getUserModels();
@@ -550,6 +551,52 @@ describe('updateCategory()', () => {
   });
 });
 
+describe('updateModel()', () => {
+  it('sends PUT with category_id only when no overrides are provided', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
+
+    await updateModel('m1', { category_id: 'c1' });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/admin/models/m1',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ category_id: 'c1' }),
+      }),
+    );
+  });
+
+  it('sends PUT with runtime_overrides payload when provided', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
+
+    const overrides = {
+      cache_ram_mib: 0,
+      swa_full: true,
+      ctx_checkpoints: 32,
+      cache_reuse: 256,
+      extra: ['--threads', '8'],
+    };
+    await updateModel('m1', { runtime_overrides: overrides });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/admin/models/m1',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ runtime_overrides: overrides }),
+      }),
+    );
+  });
+
+  it('encodes the model id', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
+
+    await updateModel('org/model:latest', { runtime_overrides: {} });
+
+    const url = mockFetch.mock.calls[0][0] as string;
+    expect(url).toBe('/api/admin/models/org%2Fmodel%3Alatest');
+  });
+});
+
 describe('updateUser()', () => {
   it('sends PUT with is_admin flag', async () => {
     mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
@@ -671,7 +718,7 @@ describe('cancelReservation()', () => {
 
 describe('getAdminModels()', () => {
   it('unwraps models from /api/admin/models', async () => {
-    const models = [{ id: 'm1', hf_repo: 'r', filename: null, size_bytes: 0, category_id: null, loaded: false, backend_port: null, backend_type: 'vllm', last_used_at: null, created_at: '', context_length: null, n_layers: null, n_heads: null, n_kv_heads: null, embedding_length: null }];
+    const models = [{ id: 'm1', hf_repo: 'r', filename: null, size_bytes: 0, category_id: null, loaded: false, backend_port: null, backend_type: 'vllm', last_used_at: null, created_at: '', context_length: null, n_layers: null, n_heads: null, n_kv_heads: null, embedding_length: null, runtime_overrides: { cache_ram_mib: 0, swa_full: true } }];
     mockFetch.mockResolvedValueOnce(okResponse({ models }));
 
     const result = await getAdminModels();

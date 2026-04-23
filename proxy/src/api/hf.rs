@@ -951,12 +951,24 @@ async fn run_download(
     // Step 10: Detect the primary model file
     let primary_filename = detect_primary_file(&downloadable);
 
+    // Auto-mitigation for llama.cpp #21762: SWA-bearing dense models can crash
+    // in the prompt-cache save path. Disable the cache by default for those.
+    // Operator can override via PUT /api/admin/models/:id.
+    let runtime_overrides_json = auto_runtime_overrides(&gguf_meta);
+    if runtime_overrides_json != "{}" {
+        info!(
+            hf_repo = %hf_repo,
+            sliding_window = ?gguf_meta.sliding_window,
+            "Auto-setting runtime_overrides cache_ram_mib=0 (SWA + dense)"
+        );
+    }
+
     // Step 11: Register model in DB
     let model_id = Uuid::new_v4().to_string();
     let size_bytes = total_downloaded as i64;
     let bt = backend_type.as_deref().unwrap_or("llamacpp");
     match sqlx::query(
-        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO models (id, hf_repo, filename, size_bytes, category_id, backend_type, model_metadata, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length, runtime_overrides) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&model_id)
     .bind(&hf_repo)
@@ -972,6 +984,7 @@ async fn run_download(
     .bind(gguf_meta.embedding_length.map(|v| v as i64))
     .bind(gguf_meta.key_length.map(|v| v as i64))
     .bind(gguf_meta.value_length.map(|v| v as i64))
+    .bind(runtime_overrides_json)
     .execute(&app_state.db.pool)
     .await
     {
@@ -1217,6 +1230,22 @@ pub struct GgufMetadata {
     pub head_count_kv: Option<u32>, // attention.head_count_kv
     pub key_length: Option<u32>,    // attention.key_length
     pub value_length: Option<u32>,  // attention.value_length
+    pub sliding_window: Option<u32>, // <arch>.attention.sliding_window
+    pub expert_count: Option<u32>,  // <arch>.expert_count
+}
+
+/// Decide the initial `runtime_overrides` JSON value based on GGUF metadata.
+///
+/// Auto-mitigation for llama.cpp #21762: SWA-bearing dense models can crash
+/// in the prompt-cache save path. Disable the cache by default for those.
+/// MoE models (expert_count > 0) and non-SWA models get the empty-object
+/// default. Operator can override via PUT /api/admin/models/:id.
+pub fn auto_runtime_overrides(meta: &GgufMetadata) -> &'static str {
+    if meta.sliding_window.is_some() && meta.expert_count.unwrap_or(0) == 0 {
+        r#"{"cache_ram_mib":0}"#
+    } else {
+        "{}"
+    }
 }
 
 /// Read architecture metadata from a GGUF file's header.
@@ -1390,6 +1419,8 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
     const HEAD_COUNT_KV: &str = ".attention.head_count_kv";
     const KEY_LENGTH: &str = ".attention.key_length";
     const VALUE_LENGTH: &str = ".attention.value_length";
+    const SLIDING_WINDOW: &str = ".attention.sliding_window";
+    const EXPERT_COUNT: &str = ".expert_count";
 
     for _ in 0..n_kv {
         let key = read_string(&mut f).await?;
@@ -1422,6 +1453,10 @@ pub async fn read_gguf_metadata(path: &str) -> Result<GgufMetadata, String> {
             Some(&mut meta.key_length)
         } else if key.ends_with(VALUE_LENGTH) {
             Some(&mut meta.value_length)
+        } else if key.ends_with(SLIDING_WINDOW) {
+            Some(&mut meta.sliding_window)
+        } else if key.ends_with(EXPERT_COUNT) {
+            Some(&mut meta.expert_count)
         } else {
             None
         };
@@ -1825,5 +1860,102 @@ mod tests {
         let meta = parse_gguf_bytes(&data).await;
         assert_eq!(meta.key_length, None);
         assert_eq!(meta.value_length, None);
+    }
+
+    // -- sliding_window / expert_count parsing -------------------------------
+
+    #[tokio::test]
+    async fn gguf_sliding_window_parsed() {
+        // Gemma3-style SWA model
+        let data = build_gguf(&[(
+            "gemma3.attention.sliding_window",
+            4,
+            1024u32.to_le_bytes().to_vec(),
+        )]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.sliding_window, Some(1024));
+        assert_eq!(meta.expert_count, None);
+    }
+
+    #[tokio::test]
+    async fn gguf_expert_count_parsed() {
+        // Qwen-MoE-style model
+        let data = build_gguf(&[("qwen.expert_count", 4, 128u32.to_le_bytes().to_vec())]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.expert_count, Some(128));
+        assert_eq!(meta.sliding_window, None);
+    }
+
+    #[tokio::test]
+    async fn gguf_no_sliding_window_or_expert_count_stays_none() {
+        // Standard dense, non-SWA model
+        let data = build_gguf(&[
+            ("llama.embedding_length", 4, 4096u32.to_le_bytes().to_vec()),
+            (
+                "llama.attention.head_count",
+                4,
+                32u32.to_le_bytes().to_vec(),
+            ),
+        ]);
+        let meta = parse_gguf_bytes(&data).await;
+        assert_eq!(meta.sliding_window, None);
+        assert_eq!(meta.expert_count, None);
+    }
+
+    // -- auto_runtime_overrides ----------------------------------------------
+
+    #[test]
+    fn auto_overrides_swa_dense_disables_cache() {
+        // SWA-bearing, dense (no MoE) → must disable the prompt cache.
+        let meta = GgufMetadata {
+            sliding_window: Some(1024),
+            expert_count: None,
+            ..Default::default()
+        };
+        assert_eq!(auto_runtime_overrides(&meta), r#"{"cache_ram_mib":0}"#);
+    }
+
+    #[test]
+    fn auto_overrides_swa_dense_explicit_zero_experts() {
+        // expert_count = Some(0) is also "dense" — same treatment.
+        let meta = GgufMetadata {
+            sliding_window: Some(2048),
+            expert_count: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(auto_runtime_overrides(&meta), r#"{"cache_ram_mib":0}"#);
+    }
+
+    #[test]
+    fn auto_overrides_swa_moe_keeps_default() {
+        // SWA + MoE — bug doesn't apply, leave overrides empty.
+        let meta = GgufMetadata {
+            sliding_window: Some(1024),
+            expert_count: Some(128),
+            ..Default::default()
+        };
+        assert_eq!(auto_runtime_overrides(&meta), "{}");
+    }
+
+    #[test]
+    fn auto_overrides_no_swa_dense_keeps_default() {
+        // Standard dense model without SWA — leave overrides empty.
+        let meta = GgufMetadata {
+            sliding_window: None,
+            expert_count: None,
+            ..Default::default()
+        };
+        assert_eq!(auto_runtime_overrides(&meta), "{}");
+    }
+
+    #[test]
+    fn auto_overrides_no_swa_moe_keeps_default() {
+        // MoE without SWA — leave overrides empty.
+        let meta = GgufMetadata {
+            sliding_window: None,
+            expert_count: Some(8),
+            ..Default::default()
+        };
+        assert_eq!(auto_runtime_overrides(&meta), "{}");
     }
 }

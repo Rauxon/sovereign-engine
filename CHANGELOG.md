@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-04-23
+
+### Added
+- Per-model `runtime_overrides` JSON column on the `models` table — admins can set llama-server CLI flags (`--cache-ram`, `--swa-full`, `-ctxcp`, `--cache-reuse`, plus free-form `extra`) per model via a new editor on the Model Mapping page (migration `20260423000000_model_runtime_overrides.sql`)
+- Auto-detect at HuggingFace download-and-register time: SWA-bearing dense models (e.g. Gemma 3 31B) get `cache_ram_mib: 0` populated automatically as a stop-gap mitigation for upstream llama.cpp issue #21762
+- GGUF metadata reader extracts `<arch>.attention.sliding_window` and `<arch>.expert_count`
+- New `ModelRuntimeOverrides` Rust type with typed knobs and range/forbidden-prefix validation (19 unit tests); React `RuntimeOverridesEditor` component with live CLI preview (25 tests)
+
+### Fixed
+- Recurring `502 backend_unavailable` outages on Gemma 3 31B caused by `GGML_ASSERT(tensor->data != NULL)` in llama.cpp's prompt-cache save path (`state_write_data`) on dense + SWA models. Workaround disables the server-level prompt cache via `--cache-ram 0`. The bug is open upstream as `ggml-org/llama.cpp#21762` and is unresolved in builds up to b8882; once a fixed build is available, operators can clear the override via the admin UI to re-enable the cache
+- `fetch_all_models` now selects `key_length` and `value_length` (previously absent — sqlx tolerated due to `Option<i64>` types)
+
 ## [1.4.2] - 2026-04-07
 
 ### Fixed

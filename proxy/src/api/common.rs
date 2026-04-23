@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::error;
 use crate::db::models::{Model, ModelCategory};
+use crate::docker::runtime_overrides::ModelRuntimeOverrides;
 use crate::metrics::ContainerStatus;
 use crate::AppState;
 
@@ -64,7 +65,7 @@ pub async fn fetch_all_categories(pool: &SqlitePool) -> impl IntoResponse {
 /// Fetch all registered models. Used by both admin and user list endpoints.
 pub async fn fetch_all_models(pool: &SqlitePool) -> impl IntoResponse {
     match sqlx::query_as::<_, Model>(
-        "SELECT id, hf_repo, filename, size_bytes, category_id, loaded, backend_port, backend_type, last_used_at, created_at, context_length, n_layers, n_heads, n_kv_heads, embedding_length FROM models",
+        "SELECT id, hf_repo, filename, size_bytes, category_id, loaded, backend_port, backend_type, last_used_at, created_at, context_length, n_layers, n_heads, n_kv_heads, embedding_length, key_length, value_length, runtime_overrides FROM models",
     )
     .fetch_all(pool)
     .await
@@ -130,6 +131,9 @@ pub struct ModelStartRow {
     pub filename: Option<String>,
     pub backend_type: String,
     pub context_length: Option<i64>,
+    /// JSON blob; deserialized into [`ModelRuntimeOverrides`] in the start path.
+    /// Stored as text per the `runtime_overrides` column.
+    pub runtime_overrides: String,
 }
 
 /// Core container-start logic shared between admin and reservation handlers.
@@ -142,7 +146,7 @@ pub async fn start_container_core(
 ) -> Result<(String, String), axum::response::Response> {
     // Look up the model
     let model: Option<ModelStartRow> = sqlx::query_as(
-        "SELECT id, hf_repo, filename, backend_type, context_length FROM models WHERE id = ?",
+        "SELECT id, hf_repo, filename, backend_type, context_length, runtime_overrides FROM models WHERE id = ?",
     )
     .bind(&params.model_id)
     .fetch_optional(&state.db.pool)
@@ -155,6 +159,7 @@ pub async fn start_container_core(
         filename,
         backend_type: db_backend_type,
         context_length: db_context_length,
+        runtime_overrides: runtime_overrides_json,
     } = model.ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -199,6 +204,11 @@ pub async fn start_container_core(
             };
 
             let parallel = params.parallel.unwrap_or(1).max(1);
+            // A bad JSON blob in the DB shouldn't keep the model from starting —
+            // fall back to defaults (i.e. no overrides) and carry on.
+            let overrides =
+                serde_json::from_str::<ModelRuntimeOverrides>(&runtime_overrides_json)
+                    .unwrap_or_default();
             let llamacpp_config = crate::docker::llamacpp::LlamacppConfig {
                 model_id: model_id.clone(),
                 gguf_path,
@@ -208,6 +218,7 @@ pub async fn start_container_core(
                 gpu_layers: params.gpu_layers.unwrap_or(99),
                 context_size,
                 parallel,
+                extra_args: overrides.to_cli_args(),
                 uid,
                 api_key: api_key.clone(),
                 ..Default::default()

@@ -1,10 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getCategories, getAdminModels, createCategory, updateCategory, deleteCategory, updateModel } from '../../api';
-import type { Category, AdminModel } from '../../types';
+import type { Category, AdminModel, RuntimeOverrides } from '../../types';
 import { useTheme, tableStyles, formStyles } from '../../theme';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ErrorAlert from '../../components/common/ErrorAlert';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
+import RuntimeOverridesEditor from '../../components/admin/RuntimeOverridesEditor';
+
+/** Count how many runtime override fields are non-default (used for the row badge). */
+function countOverrides(o: RuntimeOverrides | null | undefined): number {
+  if (!o) return 0;
+  let n = 0;
+  if (o.cache_ram_mib !== undefined) n++;
+  if (o.swa_full !== undefined) n++;
+  if (o.ctx_checkpoints !== undefined) n++;
+  if (o.cache_reuse !== undefined) n++;
+  if (o.extra && o.extra.length > 0) n++;
+  return n;
+}
 
 export default function ModelMapping() {
   const { colors } = useTheme();
@@ -24,6 +37,9 @@ export default function ModelMapping() {
 
   // Delete confirm
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  // Runtime overrides editor
+  const [editingOverridesFor, setEditingOverridesFor] = useState<AdminModel | null>(null);
 
   const { table: tableStyle, th: thStyle, td: tdStyle } = tableStyles(colors);
   const { input: inputStyle, label: labelStyle } = formStyles(colors);
@@ -107,6 +123,13 @@ export default function ModelMapping() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update model');
     }
+  };
+
+  const handleOverridesSaved = (modelId: string, overrides: RuntimeOverrides) => {
+    setModels((prev) =>
+      prev.map((m) => (m.id === modelId ? { ...m, runtime_overrides: overrides } : m))
+    );
+    setEditingOverridesFor(null);
   };
 
   const getModelName = (modelId: string | null): string => {
@@ -257,57 +280,96 @@ export default function ModelMapping() {
               <th style={thStyle}>Backend</th>
               <th style={thStyle}>Status</th>
               <th style={thStyle}>Category</th>
+              <th style={thStyle}>Runtime overrides</th>
             </tr>
           </thead>
           <tbody>
-            {models.map((model) => (
-              <tr key={model.id}>
-                <td style={tdStyle}>{model.hf_repo}</td>
-                <td style={tdStyle}>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      padding: '0.15rem 0.5rem',
-                      borderRadius: 12,
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: colors.badgeWarningBg,
-                      color: colors.badgeWarningText,
-                    }}
-                  >
-                    llama.cpp
-                  </span>
-                </td>
-                <td style={tdStyle}>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      padding: '0.2rem 0.6rem',
-                      borderRadius: 12,
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      background: model.loaded ? colors.badgeSuccessBg : colors.badgeNeutralBg,
-                      color: model.loaded ? colors.badgeSuccessText : colors.badgeNeutralText,
-                    }}
-                  >
-                    {model.loaded ? 'Loaded' : 'Not Loaded'}
-                  </span>
-                </td>
-                <td style={tdStyle}>
-                  <select
-                    aria-label={`Category for ${model.hf_repo}`}
-                    value={model.category_id || ''}
-                    onChange={(e) => handleModelCategoryChange(model.id, e.target.value)}
-                    style={{ padding: '0.3rem 0.5rem', border: `1px solid ${colors.inputBorder}`, borderRadius: 4, fontSize: '0.85rem', background: colors.inputBg, color: colors.textPrimary }}
-                  >
-                    <option value="">Unassigned</option>
-                    {categories.map((cat) => (
-                      <option key={cat.id} value={cat.id}>{cat.name}</option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-            ))}
+            {models.map((model) => {
+              const overrideCount = countOverrides(model.runtime_overrides);
+              return (
+                <tr key={model.id}>
+                  <td style={tdStyle}>{model.hf_repo}</td>
+                  <td style={tdStyle}>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: 12,
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: colors.badgeWarningBg,
+                        color: colors.badgeWarningText,
+                      }}
+                    >
+                      llama.cpp
+                    </span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        padding: '0.2rem 0.6rem',
+                        borderRadius: 12,
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        background: model.loaded ? colors.badgeSuccessBg : colors.badgeNeutralBg,
+                        color: model.loaded ? colors.badgeSuccessText : colors.badgeNeutralText,
+                      }}
+                    >
+                      {model.loaded ? 'Loaded' : 'Not Loaded'}
+                    </span>
+                  </td>
+                  <td style={tdStyle}>
+                    <select
+                      aria-label={`Category for ${model.hf_repo}`}
+                      value={model.category_id || ''}
+                      onChange={(e) => handleModelCategoryChange(model.id, e.target.value)}
+                      style={{ padding: '0.3rem 0.5rem', border: `1px solid ${colors.inputBorder}`, borderRadius: 4, fontSize: '0.85rem', background: colors.inputBg, color: colors.textPrimary }}
+                    >
+                      <option value="">Unassigned</option>
+                      {categories.map((cat) => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <button
+                        onClick={() => setEditingOverridesFor(model)}
+                        aria-label={`Edit runtime overrides for ${model.hf_repo}`}
+                        style={{
+                          padding: '0.3rem 0.7rem',
+                          background: colors.buttonPrimary,
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          fontSize: '0.8rem',
+                        }}
+                      >
+                        Edit overrides
+                      </button>
+                      {overrideCount > 0 && (
+                        <span
+                          title={`${overrideCount} override${overrideCount === 1 ? '' : 's'} set`}
+                          style={{
+                            display: 'inline-block',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 12,
+                            fontSize: '0.7rem',
+                            fontWeight: 600,
+                            background: colors.badgeInfoBg,
+                            color: colors.badgeInfoText,
+                          }}
+                        >
+                          {overrideCount} set
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
@@ -320,6 +382,14 @@ export default function ModelMapping() {
           destructive
           onConfirm={() => handleDelete(confirmDelete)}
           onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {editingOverridesFor && (
+        <RuntimeOverridesEditor
+          model={editingOverridesFor}
+          onSaved={(overrides) => handleOverridesSaved(editingOverridesFor.id, overrides)}
+          onCancel={() => setEditingOverridesFor(null)}
         />
       )}
     </div>

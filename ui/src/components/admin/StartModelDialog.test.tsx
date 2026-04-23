@@ -31,6 +31,7 @@ const baseModel: AdminModel = {
   n_heads: 32,
   n_kv_heads: 8,
   embedding_length: 4096,
+  runtime_overrides: null,
 };
 
 const fittingEstimate: VramEstimate = {

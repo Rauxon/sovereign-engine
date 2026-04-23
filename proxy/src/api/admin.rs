@@ -14,6 +14,7 @@ use super::common;
 use super::error;
 use crate::auth::SessionAuth;
 use crate::db::models::{IdpConfigPublic, User};
+use crate::docker::runtime_overrides::ModelRuntimeOverrides;
 use crate::AppState;
 
 /// Row from `models` used by the estimate_vram handler.
@@ -462,6 +463,12 @@ struct RegisterModelRequest {
 }
 
 /// POST /api/admin/models/register — Register a new model.
+///
+/// Note: `runtime_overrides` is intentionally NOT accepted here. The struct
+/// has no such field and serde silently drops unknown JSON keys, so callers
+/// that include it get no error but no effect either. New rows always start
+/// with the DB default `'{}'`; use `PUT /api/admin/models/:id` to set
+/// overrides afterwards.
 async fn register_model(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<SessionAuth>,
@@ -476,6 +483,7 @@ async fn register_model(
     let id = Uuid::new_v4().to_string();
 
     let backend_type = req.backend_type.as_deref().unwrap_or("llamacpp");
+    // runtime_overrides defaults to '{}' via the column DEFAULT — don't bind it here.
     match sqlx::query(
         "INSERT INTO models (id, hf_repo, category_id, backend_type) VALUES (?, ?, ?, ?)",
     )
@@ -501,6 +509,10 @@ async fn register_model(
 #[derive(Debug, Deserialize)]
 struct UpdateModelRequest {
     category_id: Option<String>,
+    /// Optional per-model llama-server CLI overrides. When `None`, only
+    /// `category_id` is updated (preserves the historical PUT semantics).
+    #[serde(default)]
+    runtime_overrides: Option<ModelRuntimeOverrides>,
 }
 
 /// PUT /api/admin/models/:id — Update model metadata.
@@ -510,12 +522,44 @@ async fn update_model(
     Path(id): Path<String>,
     Json(req): Json<UpdateModelRequest>,
 ) -> impl IntoResponse {
-    match sqlx::query("UPDATE models SET category_id = ? WHERE id = ?")
-        .bind(&req.category_id)
-        .bind(&id)
-        .execute(&state.db.pool)
-        .await
-    {
+    // If the caller supplied runtime_overrides, validate + serialize before
+    // we touch the DB so a bad payload comes back as a clean 400.
+    let overrides_json: Option<String> = match &req.runtime_overrides {
+        Some(o) => {
+            if let Err(reason) = o.validate() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": reason })),
+                )
+                    .into_response();
+            }
+            match serde_json::to_string(o) {
+                Ok(s) => Some(s),
+                Err(e) => return error::internal_error("update_model:serialize_overrides", e),
+            }
+        }
+        None => None,
+    };
+
+    let result = match &overrides_json {
+        Some(json) => {
+            sqlx::query("UPDATE models SET category_id = ?, runtime_overrides = ? WHERE id = ?")
+                .bind(&req.category_id)
+                .bind(json)
+                .bind(&id)
+                .execute(&state.db.pool)
+                .await
+        }
+        None => {
+            sqlx::query("UPDATE models SET category_id = ? WHERE id = ?")
+                .bind(&req.category_id)
+                .bind(&id)
+                .execute(&state.db.pool)
+                .await
+        }
+    };
+
+    match result {
         Ok(result) => {
             if result.rows_affected() == 0 {
                 (
@@ -524,7 +568,14 @@ async fn update_model(
                 )
                     .into_response()
             } else {
-                info!(target: "audit", action = "model.update", actor = %session.user_id, resource = %id, "Admin updated model");
+                match &overrides_json {
+                    Some(json) => {
+                        info!(target: "audit", action = "model.update", actor = %session.user_id, resource = %id, runtime_overrides = %json, "Admin updated model");
+                    }
+                    None => {
+                        info!(target: "audit", action = "model.update", actor = %session.user_id, resource = %id, "Admin updated model");
+                    }
+                }
                 Json(serde_json::json!({ "status": "updated" })).into_response()
             }
         }

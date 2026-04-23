@@ -11,6 +11,7 @@ import type {
   Category,
   CategoryCreateRequest,
   AdminModel,
+  RuntimeOverrides,
   AdminUser,
   SystemInfo,
   OpenAIModel,
@@ -262,7 +263,14 @@ export async function getAdminModels(): Promise<AdminModel[]> {
   return data.models;
 }
 
-export async function updateModel(id: string, req: { category_id?: string | null; backend_type?: string }): Promise<void> {
+export async function updateModel(
+  id: string,
+  req: {
+    category_id?: string | null;
+    backend_type?: string;
+    runtime_overrides?: RuntimeOverrides;
+  },
+): Promise<void> {
   await request<{ status: string }>(`/api/admin/models/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(req),

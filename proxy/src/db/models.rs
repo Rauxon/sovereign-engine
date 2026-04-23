@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use sqlx::FromRow;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -43,6 +43,21 @@ pub struct Model {
     pub embedding_length: Option<i64>,
     pub key_length: Option<i64>,
     pub value_length: Option<i64>,
+    /// Per-model llama-server CLI overrides. Stored as a JSON TEXT column
+    /// (defaults to `{}` per migration). Serialized to the API as a nested
+    /// object, not a string — see [`serialize_runtime_overrides`].
+    #[serde(serialize_with = "serialize_runtime_overrides")]
+    pub runtime_overrides: String,
+}
+
+/// Serialize the `runtime_overrides` JSON column as a nested object so the
+/// wire shape matches the typed `RuntimeOverrides | null` the UI expects.
+/// Falls back to `{}` if the stored text fails to parse — keeps the API
+/// contract stable even if a row somehow holds invalid JSON.
+fn serialize_runtime_overrides<S: Serializer>(s: &str, ser: S) -> Result<S::Ok, S::Error> {
+    let value: serde_json::Value =
+        serde_json::from_str(s).unwrap_or_else(|_| serde_json::json!({}));
+    value.serialize(ser)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -77,4 +92,54 @@ pub struct TokenListItem {
     pub expires_at: Option<DateTime<Utc>>,
     pub revoked: bool,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_model(runtime_overrides: &str) -> Model {
+        Model {
+            id: "m".into(),
+            hf_repo: "r".into(),
+            filename: None,
+            size_bytes: 0,
+            category_id: None,
+            loaded: false,
+            backend_port: None,
+            backend_type: "llamacpp".into(),
+            last_used_at: None,
+            created_at: Utc::now(),
+            context_length: None,
+            n_layers: None,
+            n_heads: None,
+            n_kv_heads: None,
+            embedding_length: None,
+            key_length: None,
+            value_length: None,
+            runtime_overrides: runtime_overrides.into(),
+        }
+    }
+
+    #[test]
+    fn runtime_overrides_serializes_as_nested_object_not_string() {
+        let m = sample_model(r#"{"cache_ram_mib":0}"#);
+        let json = serde_json::to_value(&m).expect("serialize");
+        assert_eq!(json["runtime_overrides"], serde_json::json!({"cache_ram_mib": 0}));
+        assert!(!json["runtime_overrides"].is_string());
+    }
+
+    #[test]
+    fn runtime_overrides_default_serializes_as_empty_object() {
+        let m = sample_model("{}");
+        let json = serde_json::to_value(&m).expect("serialize");
+        assert_eq!(json["runtime_overrides"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn runtime_overrides_invalid_json_falls_back_to_empty_object() {
+        let m = sample_model("not json");
+        let json = serde_json::to_value(&m).expect("serialize");
+        assert_eq!(json["runtime_overrides"], serde_json::json!({}));
+    }
 }

@@ -148,6 +148,25 @@ export interface CategoryCreateRequest {
 
 // ---- Admin: Models ----
 
+/**
+ * Per-model overrides for the llama.cpp CLI args used at container start.
+ *
+ * All fields are optional. An omitted field means "use llama.cpp default".
+ * An empty object `{}` is also valid and means "use defaults for everything".
+ */
+export interface RuntimeOverrides {
+  /** `--cache-ram <MiB>`. Set to 0 to disable the prompt LRU cache. */
+  cache_ram_mib?: number;
+  /** `--swa-full`. Allocate sliding-window attention cache at full size. */
+  swa_full?: boolean;
+  /** `--ctx-checkpoints <N>`. Per-slot KV snapshots. */
+  ctx_checkpoints?: number;
+  /** `--cache-reuse <N>`. Min token chunk for KV-shifting cross-request reuse. */
+  cache_reuse?: number;
+  /** Raw additional flags. Each element is one CLI token. */
+  extra?: string[];
+}
+
 export interface AdminModel {
   id: string;
   hf_repo: string;
@@ -164,6 +183,7 @@ export interface AdminModel {
   n_heads: number | null;
   n_kv_heads: number | null;
   embedding_length: number | null;
+  runtime_overrides: RuntimeOverrides | null;
 }
 
 // ---- Admin: Users ----
