@@ -27,10 +27,19 @@ import type {
   CreateReservationRequest,
 } from './types';
 
-class ApiError extends Error {
-  constructor(public status: number, message: string) {
+export class ApiError extends Error {
+  /**
+   * Parsed JSON body of the error response, if it was valid JSON. Callers
+   * that care about structured error payloads (e.g. the `blocking_tokens`
+   * list returned from `DELETE /api/admin/models/:id` on 409) can read it
+   * here instead of re-fetching or re-parsing.
+   */
+  public data: unknown;
+
+  constructor(public status: number, message: string, data?: unknown) {
     super(message);
     this.name = 'ApiError';
+    this.data = data;
   }
 }
 
@@ -56,18 +65,20 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
+    let data: unknown = undefined;
     try {
-      const body = await res.json();
+      data = await res.json();
+      const body = data as { error?: string | { message?: string } };
       if (typeof body.error === 'string') {
         message = body.error;
-      } else if (body.error?.message) {
+      } else if (body.error && typeof body.error === 'object' && body.error.message) {
         message = body.error.message;
       }
     } catch {
       // body wasn't JSON, use status text
       message = res.statusText || message;
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, data);
   }
 
   // Handle 204 No Content
@@ -277,10 +288,34 @@ export async function updateModel(
   });
 }
 
-export async function deleteModel(id: string): Promise<void> {
-  await request<{ status: string }>(`/api/admin/models/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
+/** One row of the `blocking_tokens` array returned with a 409. */
+export interface BlockingToken {
+  id: string;
+  name: string;
+  user_email: string | null;
+}
+
+export interface DeleteModelResult {
+  status: string;
+  revoked_tokens: number;
+}
+
+/**
+ * Delete a model. When `override` is true, any active tokens pinned to this
+ * model are force-revoked (soft-deleted) as part of the delete. Without
+ * override, the server returns 409 and this call throws `ApiError` with
+ * `data.blocking_tokens` populated — callers should catch that case and
+ * prompt the admin before retrying with `{ override: true }`.
+ */
+export async function deleteModel(
+  id: string,
+  opts: { override?: boolean } = {},
+): Promise<DeleteModelResult> {
+  const qs = opts.override ? '?override=true' : '';
+  return request<DeleteModelResult>(
+    `/api/admin/models/${encodeURIComponent(id)}${qs}`,
+    { method: 'DELETE' },
+  );
 }
 
 // ---- Admin: Users ----

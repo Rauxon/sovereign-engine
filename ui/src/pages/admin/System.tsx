@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { getSystemInfo, getAdminModels, stopContainer, deleteModel } from '../../api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { getSystemInfo, getAdminModels, stopContainer, deleteModel, ApiError, type BlockingToken } from '../../api';
 import type { SystemInfo, AdminModel, SystemContainer, GpuMemory, CpuInfo, GateSnapshot } from '../../types';
 import { useTheme } from '../../theme';
 import { useEventStream, type ConnectionStatus } from '../../hooks/useEventStream';
@@ -61,6 +61,10 @@ export default function System() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AdminModel | null>(null);
+  const [overrideDelete, setOverrideDelete] = useState<{
+    model: AdminModel;
+    blockingTokens: BlockingToken[];
+  } | null>(null);
   const [startModel, setStartModel] = useState<AdminModel | null>(null);
 
   // SSE live metrics
@@ -118,14 +122,26 @@ export default function System() {
     }
   };
 
-  const handleDelete = async (model: AdminModel) => {
+  const handleDelete = async (model: AdminModel, override = false) => {
     setConfirmDelete(null);
+    setOverrideDelete(null);
     setActionLoading(model.id);
     try {
-      await deleteModel(model.id);
+      await deleteModel(model.id, { override });
       await refreshModels();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete model');
+      // 409 — model is in use by active tokens. Surface the blockers so the
+      // admin can choose to force-delete (which soft-deletes those tokens).
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        Array.isArray((err.data as { blocking_tokens?: unknown })?.blocking_tokens)
+      ) {
+        const blockingTokens = (err.data as { blocking_tokens: BlockingToken[] }).blocking_tokens;
+        setOverrideDelete({ model, blockingTokens });
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to delete model');
+      }
     } finally {
       setActionLoading(null);
     }
@@ -478,6 +494,120 @@ export default function System() {
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+
+      {overrideDelete && (
+        <OverrideDeleteDialog
+          model={overrideDelete.model}
+          blockingTokens={overrideDelete.blockingTokens}
+          onConfirm={() => handleDelete(overrideDelete.model, true)}
+          onCancel={() => setOverrideDelete(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function OverrideDeleteDialog({
+  model,
+  blockingTokens,
+  onConfirm,
+  onCancel,
+}: Readonly<{
+  model: AdminModel;
+  blockingTokens: BlockingToken[];
+  onConfirm: () => void;
+  onCancel: () => void;
+}>) {
+  const { colors } = useTheme();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  const count = blockingTokens.length;
+  const label = count === 1 ? 'token' : 'tokens';
+
+  return (
+    <>
+      <style>{`.confirm-dialog::backdrop { background: ${colors.overlayBg}; }`}</style>
+      <dialog
+        ref={dialogRef}
+        className="confirm-dialog"
+        style={{
+          border: 'none',
+          borderRadius: 8,
+          padding: '1.5rem',
+          maxWidth: 520,
+          width: '90%',
+          boxShadow: colors.dialogShadow,
+          background: colors.dialogBg,
+          color: 'inherit',
+        }}
+        onClose={onCancel}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
+      >
+        <h3 style={{ margin: '0 0 0.75rem', color: colors.textPrimary }}>Model in use</h3>
+        <p style={{ margin: '0 0 0.75rem', color: colors.textMuted, lineHeight: 1.5 }}>
+          <strong>{model.hf_repo}</strong> is pinned by {count} active {label}. Deleting
+          the model will revoke {count === 1 ? 'this token' : 'these tokens'} — the owner
+          will need a new token before they can use the service again.
+        </p>
+        <ul
+          style={{
+            margin: '0 0 1rem',
+            padding: '0.5rem 0.75rem',
+            listStyle: 'none',
+            maxHeight: 180,
+            overflowY: 'auto',
+            border: `1px solid ${colors.buttonDisabled}`,
+            borderRadius: 4,
+            background: colors.cardBg,
+          }}
+        >
+          {blockingTokens.map((t) => (
+            <li
+              key={t.id}
+              style={{ padding: '0.25rem 0', color: colors.textPrimary, fontSize: '0.9rem' }}
+            >
+              <strong>{t.name}</strong>
+              {t.user_email && (
+                <span style={{ color: colors.textMuted }}> — {t.user_email}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '0.5rem 1rem',
+              background: colors.buttonDisabled,
+              color: colors.textSecondary,
+              border: 'none',
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '0.5rem 1rem',
+              background: colors.buttonDanger,
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}
+          >
+            Revoke {count} {label} and delete
+          </button>
+        </div>
+      </dialog>
+    </>
   );
 }

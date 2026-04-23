@@ -583,13 +583,49 @@ async fn update_model(
     }
 }
 
-/// DELETE /api/admin/models/:id — Delete a model: stop container, remove files, delete DB record.
+/// Query parameters for `DELETE /api/admin/models/:id`.
+///
+/// `override=true` opts in to force-revoking any currently-active tokens that
+/// are pinned to this model (via `specific_model_id`). Without the override,
+/// an active pin causes the handler to return 409 with a list of blockers.
+#[derive(Deserialize, Default)]
+struct DeleteModelQuery {
+    #[serde(default, rename = "override")]
+    override_: bool,
+}
+
+/// Row returned by the blocking-tokens pre-check.
+#[derive(sqlx::FromRow, Serialize)]
+struct BlockingToken {
+    id: String,
+    name: String,
+    user_email: Option<String>,
+}
+
+/// DELETE /api/admin/models/:id — Delete a model.
+///
+/// Flow:
+/// 1. Look up the model (404 on miss).
+/// 2. Pre-check for active pins (`tokens.specific_model_id` where the token
+///    is neither revoked nor soft-deleted). If any are found and
+///    `override=true` is not set, return 409 with the blocker list — no side
+///    effects.
+/// 3. When `override=true`, soft-delete each blocking token (revoked=1,
+///    deleted_at=now) with audit logging.
+/// 4. Stop the backend container if loaded; run post-stop cleanup.
+/// 5. In a single DB transaction: NULL any remaining `specific_model_id`
+///    pins (covers just-overridden blockers and any pre-existing stale
+///    pins), defensively delete the `container_secrets` row, and delete the
+///    `models` row.
+/// 6. Remove files from disk only after the DB commit succeeds, so a
+///    failure never leaves an orphaned DB row or orphaned files on disk.
 async fn delete_model(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<SessionAuth>,
     Path(id): Path<String>,
+    Query(params): Query<DeleteModelQuery>,
 ) -> impl IntoResponse {
-    // Look up the model
+    // 1. Look up the model.
     let model: Option<(String, String, bool, String)> =
         match sqlx::query_as("SELECT id, hf_repo, loaded, backend_type FROM models WHERE id = ?")
             .bind(&id)
@@ -597,9 +633,7 @@ async fn delete_model(
             .await
         {
             Ok(row) => row,
-            Err(e) => {
-                return error::internal_error("delete_model:lookup", e);
-            }
+            Err(e) => return error::internal_error("delete_model:lookup", e),
         };
 
     let (model_id, hf_repo, loaded, backend_type) = match model {
@@ -613,38 +647,135 @@ async fn delete_model(
         }
     };
 
-    // Stop running container if loaded
+    // 2. Pre-check: active pins (not revoked, not soft-deleted).
+    let blockers: Vec<BlockingToken> = match sqlx::query_as(
+        "SELECT t.id AS id, t.name AS name, u.email AS user_email \
+         FROM tokens t LEFT JOIN users u ON u.id = t.user_id \
+         WHERE t.specific_model_id = ? AND t.revoked = 0 AND t.deleted_at IS NULL",
+    )
+    .bind(&model_id)
+    .fetch_all(&state.db.pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return error::internal_error("delete_model:blockers", e),
+    };
+
+    if !blockers.is_empty() && !params.override_ {
+        // 409 with blocker list — no state mutated.
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "Model is in use by {} active token(s). Revoke them or retry with override=true.",
+                    blockers.len()
+                ),
+                "blocking_tokens": blockers,
+            })),
+        )
+            .into_response();
+    }
+
+    // 3. Override path: soft-delete each blocker.
+    for blocker in &blockers {
+        if let Err(e) =
+            sqlx::query("UPDATE tokens SET revoked = 1, deleted_at = datetime('now') WHERE id = ?")
+                .bind(&blocker.id)
+                .execute(&state.db.pool)
+                .await
+        {
+            return error::internal_error("delete_model:soft_delete_token", e);
+        }
+        info!(
+            target: "audit",
+            action = "token.force_revoke",
+            actor = %session.user_id,
+            resource = %blocker.id,
+            reason = "model_delete_override",
+            model_id = %model_id,
+            "Force-revoked token during model delete override"
+        );
+    }
+
+    // 4. Stop the running container if loaded.
     if loaded {
         if let Err(e) = state.docker.stop_backend(&model_id, &backend_type).await {
             error!(model = %model_id, error = %e, "Failed to stop container during model delete");
-            // Continue with deletion anyway — container may already be gone
+            // Continue — container may already be gone.
         }
         common::post_stop_cleanup(&state, &model_id).await;
     }
 
-    // Delete model files from disk
+    // 5. Transactional cleanup + DB delete.
+    let mut tx = match state.db.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return error::internal_error("delete_model:tx_begin", e),
+    };
+
+    // Null any remaining pins — the override path just soft-deleted the
+    // active blockers, but pre-existing stale pins (already revoked or
+    // already soft-deleted tokens) are still pointing at this model.
+    if let Err(e) =
+        sqlx::query("UPDATE tokens SET specific_model_id = NULL WHERE specific_model_id = ?")
+            .bind(&model_id)
+            .execute(&mut *tx)
+            .await
+    {
+        return error::internal_error("delete_model:null_pins", e);
+    }
+
+    // Defensive: cover the case where `loaded` was stale and
+    // `post_stop_cleanup` didn't run, so the FK from container_secrets is
+    // guaranteed to be clear before the DELETE FROM models.
+    if let Err(e) = sqlx::query("DELETE FROM container_secrets WHERE model_id = ?")
+        .bind(&model_id)
+        .execute(&mut *tx)
+        .await
+    {
+        return error::internal_error("delete_model:container_secrets", e);
+    }
+
+    if let Err(e) = sqlx::query("DELETE FROM models WHERE id = ?")
+        .bind(&model_id)
+        .execute(&mut *tx)
+        .await
+    {
+        return error::internal_error("delete_model:db", e);
+    }
+
+    if let Err(e) = tx.commit().await {
+        return error::internal_error("delete_model:tx_commit", e);
+    }
+
+    // 6. Remove files from disk — only after the DB commit succeeded.
     let safe_repo = hf_repo.replace('/', "--");
     let model_dir = format!("{}/{}", state.config.model_path, safe_repo);
     if std::path::Path::new(&model_dir).exists() {
         if let Err(e) = tokio::fs::remove_dir_all(&model_dir).await {
-            error!(path = %model_dir, error = %e, "Failed to delete model files");
+            error!(path = %model_dir, error = %e, "Failed to delete model files after DB delete");
+            // DB row is already gone; surface a distinct error code so
+            // operators can tell this from the DB-failure case above.
             return error::internal_error("delete_model:files", e);
         }
         info!(path = %model_dir, "Model files deleted");
     }
 
-    // Delete DB record
-    match sqlx::query("DELETE FROM models WHERE id = ?")
-        .bind(&model_id)
-        .execute(&state.db.pool)
-        .await
-    {
-        Ok(_) => {
-            info!(target: "audit", action = "model.delete", actor = %session.user_id, resource = %model_id, hf_repo = %hf_repo, "Admin deleted model");
-            Json(serde_json::json!({ "status": "deleted" })).into_response()
-        }
-        Err(e) => error::internal_error("delete_model:db", e),
-    }
+    info!(
+        target: "audit",
+        action = "model.delete",
+        actor = %session.user_id,
+        resource = %model_id,
+        hf_repo = %hf_repo,
+        overridden = params.override_,
+        revoked_tokens = blockers.len(),
+        "Admin deleted model"
+    );
+
+    Json(serde_json::json!({
+        "status": "deleted",
+        "revoked_tokens": blockers.len(),
+    }))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1223,6 +1354,7 @@ mod tests {
     // -- estimate_kv_cache_mb -------------------------------------------------
 
     /// Helper to build KvCacheParams with common defaults.
+    #[allow(clippy::too_many_arguments)]
     fn kv_params(
         n_layers: Option<i64>,
         n_heads: Option<i64>,

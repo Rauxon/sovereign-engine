@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-04-23
+
+### Fixed
+- `DELETE /api/admin/models/:id` no longer returns a generic 500 when a model is pinned by an active token (SQLite FK violation on `tokens.specific_model_id`). The handler now pre-checks for blocking tokens and returns a structured 409 listing them; admins can retry with `?override=true` to soft-delete (revoke + `deleted_at`) the blockers and proceed. Filesystem removal moved to *after* the DB transaction commits, so a failed delete no longer leaves orphaned files or a stale DB row.
+- Admin UI (`System` page) handles the 409 by surfacing the blocking tokens (name + user email) in a confirmation dialog with a "Revoke N tokens and delete" option.
+- `ApiError` in the TypeScript client now preserves the parsed JSON error body on `.data`, so callers can inspect structured error payloads such as `blocking_tokens`.
+
 ## [1.5.0] - 2026-04-23
 
 ### Added

@@ -644,8 +644,8 @@ describe('deleteCategory()', () => {
 });
 
 describe('deleteModel()', () => {
-  it('sends DELETE with encoded model ID', async () => {
-    mockFetch.mockResolvedValueOnce(okResponse({ status: 'ok' }));
+  it('sends DELETE with encoded model ID (no override by default)', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'deleted', revoked_tokens: 0 }));
 
     await deleteModel('org/model:latest');
 
@@ -653,6 +653,39 @@ describe('deleteModel()', () => {
       '/api/admin/models/org%2Fmodel%3Alatest',
       expect.objectContaining({ method: 'DELETE' }),
     );
+  });
+
+  it('appends ?override=true when the caller opts in', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ status: 'deleted', revoked_tokens: 2 }));
+
+    const result = await deleteModel('m1', { override: true });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/admin/models/m1?override=true',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+    expect(result.revoked_tokens).toBe(2);
+  });
+
+  it('throws ApiError with blocking_tokens on 409', async () => {
+    mockFetch.mockResolvedValueOnce(
+      errorResponse(409, {
+        error: 'Model is in use by 1 active token(s).',
+        blocking_tokens: [
+          { id: 't1', name: 'dev-token', user_email: 'dev@example.com' },
+        ],
+      }),
+    );
+
+    await expect(deleteModel('m1')).rejects.toMatchObject({
+      status: 409,
+      message: 'Model is in use by 1 active token(s).',
+      data: {
+        blocking_tokens: [
+          { id: 't1', name: 'dev-token', user_email: 'dev@example.com' },
+        ],
+      },
+    });
   });
 });
 

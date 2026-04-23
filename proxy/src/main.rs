@@ -9,6 +9,8 @@ mod scheduler;
 mod tls;
 
 #[cfg(test)]
+mod admin_tests;
+#[cfg(test)]
 mod meta_token_tests;
 #[cfg(test)]
 mod reservation_tests;
