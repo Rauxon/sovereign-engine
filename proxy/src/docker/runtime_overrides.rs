@@ -11,7 +11,13 @@ use serde::{Deserialize, Serialize};
 
 /// CLI flags the proxy reserves for itself; users cannot pass them via `extra`.
 const FORBIDDEN_EXTRA_PREFIXES: &[&str] = &[
-    "--model", "--host", "--port", "--api-key", "-ngl", "-c", "-np",
+    "--model",
+    "--host",
+    "--port",
+    "--api-key",
+    "-ngl",
+    "-c",
+    "-np",
 ];
 
 const MAX_CACHE_RAM_MIB: u32 = 16384;
@@ -88,9 +94,7 @@ impl ModelRuntimeOverrides {
         }
         if let Some(n) = self.cache_reuse {
             if n > MAX_CACHE_REUSE {
-                return Err(format!(
-                    "cache_reuse {n} exceeds maximum {MAX_CACHE_REUSE}"
-                ));
+                return Err(format!("cache_reuse {n} exceeds maximum {MAX_CACHE_REUSE}"));
             }
         }
 
@@ -98,9 +102,7 @@ impl ModelRuntimeOverrides {
             for forbidden in FORBIDDEN_EXTRA_PREFIXES {
                 // Case-sensitive match: exact flag or `--flag=value` form.
                 if entry == *forbidden || entry.starts_with(&format!("{forbidden}=")) {
-                    return Err(format!(
-                        "extra argument '{entry}' is reserved by the proxy"
-                    ));
+                    return Err(format!("extra argument '{entry}' is reserved by the proxy"));
                 }
             }
         }

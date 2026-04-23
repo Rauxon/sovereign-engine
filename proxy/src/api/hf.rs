@@ -1226,12 +1226,12 @@ pub struct GgufMetadata {
     pub context_length: Option<u32>,
     pub block_count: Option<u32>, // n_layers
     pub embedding_length: Option<u32>,
-    pub head_count: Option<u32>,    // attention.head_count
-    pub head_count_kv: Option<u32>, // attention.head_count_kv
-    pub key_length: Option<u32>,    // attention.key_length
-    pub value_length: Option<u32>,  // attention.value_length
+    pub head_count: Option<u32>,     // attention.head_count
+    pub head_count_kv: Option<u32>,  // attention.head_count_kv
+    pub key_length: Option<u32>,     // attention.key_length
+    pub value_length: Option<u32>,   // attention.value_length
     pub sliding_window: Option<u32>, // <arch>.attention.sliding_window
-    pub expert_count: Option<u32>,  // <arch>.expert_count
+    pub expert_count: Option<u32>,   // <arch>.expert_count
 }
 
 /// Decide the initial `runtime_overrides` JSON value based on GGUF metadata.

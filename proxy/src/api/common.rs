@@ -206,9 +206,8 @@ pub async fn start_container_core(
             let parallel = params.parallel.unwrap_or(1).max(1);
             // A bad JSON blob in the DB shouldn't keep the model from starting —
             // fall back to defaults (i.e. no overrides) and carry on.
-            let overrides =
-                serde_json::from_str::<ModelRuntimeOverrides>(&runtime_overrides_json)
-                    .unwrap_or_default();
+            let overrides = serde_json::from_str::<ModelRuntimeOverrides>(&runtime_overrides_json)
+                .unwrap_or_default();
             let llamacpp_config = crate::docker::llamacpp::LlamacppConfig {
                 model_id: model_id.clone(),
                 gguf_path,

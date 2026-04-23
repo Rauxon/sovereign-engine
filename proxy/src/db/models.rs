@@ -125,7 +125,10 @@ mod tests {
     fn runtime_overrides_serializes_as_nested_object_not_string() {
         let m = sample_model(r#"{"cache_ram_mib":0}"#);
         let json = serde_json::to_value(&m).expect("serialize");
-        assert_eq!(json["runtime_overrides"], serde_json::json!({"cache_ram_mib": 0}));
+        assert_eq!(
+            json["runtime_overrides"],
+            serde_json::json!({"cache_ram_mib": 0})
+        );
         assert!(!json["runtime_overrides"].is_string());
     }
 
